@@ -88,7 +88,7 @@ class Tens
     return idx(thisVal,innerComps...);
   }
   
-  /// Cool feature of c++17 (avoidable at the cost of some more lines of code)
+  /// Compute the data size
   static constexpr int64_t size=product({TC::size...});
   
   /// Storage
