@@ -67,25 +67,45 @@ template <typename...TC>
 class Tens
 {
   /// Calculate the index - no more components to parse
-  int64_t idx(int64_t outer) ///< Value of all the outer components
+  int64_t index(int64_t outer) ///< Value of all the outer components
   {
     return outer;
   }
   
   /// Calculate index iteratively
+  ///
+  /// Given the components (i,j,k) we must compute ((0*ni+i)*nj+j)*nk+k
+  ///
+  /// The parsing of the variadic components is done left to right, so
+  /// to compute the nested bracket list we must proceed inward. Let's
+  /// say we are at component j. We define outer=(0*ni+i) the result
+  /// of inner step. We need to compute thisVal=outer*nj+j and pass it
+  /// to the inner step, which incorporate iteratively all the inner
+  /// components. The first step requires outer=0.
   template <typename T,
 	    typename...Tp>
-  int64_t idx(int64_t outer,      ///< Value of all the outer components
-	      T&& thisComp,       ///< Currently parsed component
-	      Tp&&...innerComps)  ///< Inner components
+  int64_t index(int64_t outer,      ///< Value of all the outer components
+		T&& thisComp,       ///< Currently parsed component
+		Tp&&...innerComps)  ///< Inner components
   {
     /// Size of this component
     const int64_t thisSize=std::remove_reference_t<T>::size;
     
     /// Value of the index when including this component
-    const int64_t thisVal=thisComp+thisSize*outer;
+    const int64_t thisVal=outer*thisSize+thisComp;
     
-    return idx(thisVal,innerComps...);
+    return index(thisVal,innerComps...);
+  }
+  
+  /// Intermediate layer to reorder the passed components
+  template <typename...Cp>
+  int64_t reorderedIndex(Cp&&...comps)
+  {
+    /// Put the arguments in atuple
+    auto argsInATuple=std::make_tuple(std::forward<Cp>(comps)...);
+    
+    /// Build the index reordering the components
+    return index(0,std::get<TC>(argsInATuple)...);
   }
   
   /// Compute the data size
@@ -100,14 +120,7 @@ public:
   template <typename...Cp>
   double& operator()(Cp&&...comps)
   {
-    /// Put the arguments in atuple
-    auto argsInATuple=std::make_tuple(std::forward<Cp>(comps)...);
-    
-    /// Build the index reordering the components
-    const int64_t i=idx(0,std::get<TC>(argsInATuple)...);
-    
-    /// Access data
-    return data[i];
+    return data[reorderedIndex(std::forward<Cp>(comps)...)];
   }
   
   /// Gives trivial access
