@@ -3,6 +3,19 @@
 
 using namespace std;
 
+/// Compute the product of the passed list of T values
+template <typename T>
+constexpr T product(const std::initializer_list<T>& list)
+{
+  /// Result
+  T out=1;
+  
+  for(auto i : list)
+    out*=i;
+  
+  return out;
+}
+
 /// Base type for a color index
 struct _Color
 {
@@ -17,7 +30,9 @@ struct _Spin
   static constexpr int64_t size=4;
 };
 
-/// Tensor component
+/// Tensor component defined by base type S
+///
+/// Inherit from S to get size
 template <typename S>
 struct TensorCompIdx : S
 {
@@ -51,7 +66,7 @@ using ColorIdx=TensorCompIdx<_Color>;
 template <typename...TC>
 class Tens
 {
-  /// Calculate the index - no more component to parse
+  /// Calculate the index - no more components to parse
   int64_t idx(int64_t outer) ///< Value of all the outer components
   {
     return outer;
@@ -73,14 +88,15 @@ class Tens
     return idx(thisVal,innerComps...);
   }
   
-public:
-  
   /// Cool feature of c++17 (avoidable at the cost of some more lines of code)
-  static constexpr int64_t size=(TC::size*...);
+  static constexpr int64_t size=product({TC::size...});
   
   /// Storage
   double data[size];
   
+public:
+  
+  /// Access to inner data with any order
   template <typename...Cp>
   double& operator()(Cp&&...comps)
   {
@@ -92,6 +108,12 @@ public:
     
     /// Access data
     return data[i];
+  }
+  
+  /// Gives trivial access
+  double& trivialAccess(int64_t iSpin,int64_t iCol)
+  {
+    return data[iCol+3*iSpin];
   }
 };
 
@@ -106,7 +128,7 @@ int main()
       a(i,j)=j+3*i;
   
   // Read components to access
-  cout<<"Please enter spin and color index: ";
+  cout<<"Please enter spin and color index to printout: ";
   
   /// Spin component
   SpinIdx spin;
@@ -126,9 +148,14 @@ int main()
   /// Color,spin access
   double cs=a(col,spin);
   
+  asm("#here accessing trivially");
+  
+  /// Color,spin access
+  double t=a.trivialAccess(spin,col);
+  
   asm("#here printing");
   
-  cout<<"Test: "<<sc<<" "<<cs<<" expected: "<<col+3*spin<<endl;
+  cout<<"Test: "<<sc<<" "<<cs<<" "<<t<<" expected: "<<col+3*spin<<endl;
   
   return 0;
 }
