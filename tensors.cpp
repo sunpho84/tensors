@@ -120,12 +120,12 @@ public:
 int main()
 {
   /// Spindolor
-  Tens<SpinIdx,ColorIdx> a;
+  Tens<SpinIdx,ColorIdx> tensor;
   
   /// Fill the spincolor with flattened index
   for(SpinIdx i(0);i<4;i++)
     for(ColorIdx j(0);j<3;j++)
-      a(i,j)=j+3*i;
+      tensor(i,j)=j+3*i;
   
   // Read components to access
   cout<<"Please enter spin and color index to printout: ";
@@ -141,17 +141,17 @@ int main()
   asm("#here accessing (spin,col)");
   
   /// Spin,color access
-  double sc=a(spin,col);
+  double sc=tensor(spin,col);
   
   asm("#here accessing (col,spin)");
   
   /// Color,spin access
-  double cs=a(col,spin);
+  double cs=tensor(col,spin);
   
   asm("#here accessing trivially");
   
   /// Color,spin access
-  double t=a.trivialAccess(spin,col);
+  double t=tensor.trivialAccess(spin,col);
   
   asm("#here printing");
   
