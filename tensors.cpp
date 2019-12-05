@@ -1,4 +1,5 @@
 #include <iostream>
+#include <memory>
 #include <tuple>
 
 using namespace std;
@@ -12,30 +13,38 @@ constexpr T product(const std::initializer_list<T>& list)
   
   for(auto i : list)
     out*=i;
-  
   return out;
 }
+
+/// Base type for a space index
+struct _Space
+{
+  /// Value beyond end
+  static constexpr int64_t sizeAtCompileTime=-1;
+};
 
 /// Base type for a color index
 struct _Color
 {
   /// Value beyond end
-  static constexpr int64_t size=3;
+  static constexpr int64_t sizeAtCompileTime=3;
 };
 
 /// Base type for a spin index
 struct _Spin
 {
   /// Value beyond end
-  static constexpr int64_t size=4;
+  static constexpr int64_t sizeAtCompileTime=4;
 };
 
 /// Tensor component defined by base type S
 ///
 /// Inherit from S to get size
 template <typename S>
-struct TensorCompIdx : S
+struct TensorCompIdx
 {
+  typedef S Base;
+  
   /// Value
   int64_t i;
   
@@ -54,7 +63,16 @@ struct TensorCompIdx : S
   {
     return i;
   }
+  
+  /// Convert to actual value
+  operator const int64_t&() const
+  {
+    return i;
+  }
 };
+
+/// Space index
+using SpaceIdx=TensorCompIdx<_Space>;
 
 /// Spin index
 using SpinIdx=TensorCompIdx<_Spin>;
@@ -62,10 +80,40 @@ using SpinIdx=TensorCompIdx<_Spin>;
 /// Color index
 using ColorIdx=TensorCompIdx<_Color>;
 
+template <typename T,
+	  typename C>
+struct Bind
+{
+  T& ref;
+  
+  C val;
+  
+  template <typename...Tail>
+  decltype(auto) operator()(Tail&&...tail)
+  {
+    return ref(val,std::forward<Tail>(tail)...);
+  }
+  
+  Bind(T&& ref,
+       C&& val)
+    : ref(ref),val(val)
+  {
+  }
+};
+
+template <typename T,
+	  typename C>
+auto bind(T&& ref,C&& val)
+{
+  return Bind<T,C>(std::forward<T>(ref),std::forward<C>(val));
+}
+
 /// Tensor
 template <typename...TC>
 class Tens
 {
+  std::tuple<TC...> sizes;
+  
   /// Calculate the index - no more components to parse
   int64_t index(int64_t outer) ///< Value of all the outer components
   {
@@ -88,9 +136,12 @@ class Tens
 		T&& thisComp,       ///< Currently parsed component
 		Tp&&...innerComps)  ///< Inner components
   {
-    /// Size of this component
-    const int64_t thisSize=std::remove_reference_t<T>::size;
+    constexpr int64_t i=std::remove_reference_t<T>::Base::sizeAtCompileTime;
     
+    /// Size of this component
+    const int64_t thisSize=(i>0)?i:std::get<std::remove_reference_t<T>>(sizes);
+    
+    //cout<<"thisSize: "<<thisSize<<endl;
     /// Value of the index when including this component
     const int64_t thisVal=outer*thisSize+thisComp;
     
@@ -109,66 +160,105 @@ class Tens
   }
   
   /// Compute the data size
-  static constexpr int64_t size=product({TC::size...});
+  int64_t size;
   
   /// Storage
-  double data[size];
+  std::unique_ptr<double[]> data;
+  
+  template <typename T>
+  int64_t initSize(int64_t s)
+  {
+    constexpr int64_t i=T::Base::sizeAtCompileTime;
+    (int64_t&)(std::get<T>(sizes))=(i>0)?i:s;
+    return std::get<T>(sizes);
+  }
   
 public:
+  
+  //
+  template <typename...TD>
+  Tens(TD&&...td)
+  {
+    const int64_t dynamicSize=product({initSize<TD>(std::forward<TD>(td))...});
+    const int64_t staticSize=abs(product({TC::Base::sizeAtCompileTime...}));
+    size=dynamicSize*staticSize;
+    //cout<<"Total size: "<<size<<endl;
+    
+    data=std::unique_ptr<double[]>(new double[size]);
+  }
   
   /// Access to inner data with any order
   template <typename...Cp>
   double& operator()(Cp&&...comps)
   {
-    return data[reorderedIndex(std::forward<Cp>(comps)...)];
+    const int64_t i=reorderedIndex(std::forward<Cp>(comps)...);
+    
+    //cout<<"Index: "<<i<<endl;
+    return data[i];
   }
   
   /// Gives trivial access
-  double& trivialAccess(int64_t iSpin,int64_t iCol)
+  double& trivialAccess(int64_t iSpin,int64_t iSpace,int64_t iCol,int64_t vol)
   {
-    return data[iCol+3*iSpin];
+    return data[iCol+3*(iSpace+vol*iSpin)];
   }
 };
 
 int main()
 {
+  int64_t vol;
+  cout<<"Please enter volume: ";
+  cin>>vol;
+  
   /// Spindolor
-  Tens<SpinIdx,ColorIdx> tensor;
+  Tens<SpinIdx,SpaceIdx,ColorIdx> tensor(SpaceIdx{vol});
   
   /// Fill the spincolor with flattened index
-  for(SpinIdx i(0);i<4;i++)
-    for(ColorIdx j(0);j<3;j++)
-      tensor(i,j)=j+3*i;
+  for(SpinIdx s(0);s<4;s++)
+    for(SpaceIdx v(0);v<vol;v++)
+      for(ColorIdx c(0);c<3;c++)
+	tensor(s,v,c)=c+3*(v+vol*s);
   
   // Read components to access
-  cout<<"Please enter spin and color index to printout: ";
+  cout<<"Please enter spin, space and color index to printout: ";
   
   /// Spin component
   SpinIdx spin;
   cin>>spin;
   
+  /// Space component
+  SpaceIdx space;
+  cin>>space;
+  
   /// Color component
   ColorIdx col;
   cin>>col;
   
-  asm("#here accessing (spin,col)");
+  asm("#here accessing (spin,space,col)");
   
-  /// Spin,color access
-  double sc=tensor(spin,col);
+  /// Spin,space,color access
+  double svc=tensor(spin,space,col);
   
-  asm("#here accessing (col,spin)");
+  asm("#here accessing (col,spin,space)");
   
-  /// Color,spin access
-  double cs=tensor(col,spin);
+  /// Color,spin,space access
+  double csv=tensor(col,spin,space);
+  
+  asm("#here accessing sequentially");
+  
+  /// Color,spin,space access
+  auto colBind=bind(tensor,col);
+  auto spinColBind=bind(colBind,spin);
+  double seq=spinColBind(space);
   
   asm("#here accessing trivially");
   
-  /// Color,spin access
-  double t=tensor.trivialAccess(spin,col);
+  /// Trivial spin access
+  double t=tensor.trivialAccess(spin,space,col,vol);
   
   asm("#here printing");
   
-  cout<<"Test: "<<sc<<" "<<cs<<" "<<t<<" expected: "<<col+3*spin<<endl;
+  cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
   return 0;
 }
