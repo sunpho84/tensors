@@ -84,7 +84,7 @@ template <typename T,
 	  typename C>
 struct Bind
 {
-  T& ref;
+  std::conditional_t<std::is_lvalue_reference<T>::value,T&,T> ref;
   
   C val;
   
@@ -101,11 +101,20 @@ struct Bind
   }
 };
 
-template <typename T,
-	  typename C>
-auto bind(T&& ref,C&& val)
+template <typename T>
+auto bind(T&& ref)
 {
-  return Bind<T,C>(std::forward<T>(ref),std::forward<C>(val));
+  return ref;
+}
+
+template <typename T,
+	  typename Head,
+	  typename...Tail>
+auto bind(T&& ref,
+	  Head&& head,
+	  Tail&&...tail)
+{
+  return bind(Bind<T,Head>(std::forward<T>(ref),std::forward<Head>(head)),std::forward<Tail>(tail)...);
 }
 
 /// Tensor
@@ -188,7 +197,16 @@ public:
   }
   
   /// Access to inner data with any order
-  template <typename...Cp>
+  template <typename...Cp,
+	    std::enable_if_t<sizeof...(Cp)!=sizeof...(TC),void*> =nullptr>
+  auto operator()(Cp&&...comps)
+  {
+    return bind(*this,comps...);
+  }
+  
+  /// Access to inner data with any order
+  template <typename...Cp,
+	    std::enable_if_t<sizeof...(Cp)==sizeof...(TC),void*> =nullptr>
   double& operator()(Cp&&...comps)
   {
     const int64_t i=reorderedIndex(std::forward<Cp>(comps)...);
@@ -204,9 +222,28 @@ public:
   }
 };
 
+#define TEST(NAME,...)							\
+  double& NAME(Tens<SpinIdx,SpaceIdx,ColorIdx>& tensor,SpinIdx spin,ColorIdx col,SpaceIdx space) \
+  {									\
+    asm("#here " #NAME "  access");					\
+    return __VA_ARGS__;							\
+  }
+
+int64_t vol;
+
+
+TEST(seq_fun,bind(bind(tensor,col),spin)(space))
+
+TEST(csv_fun,tensor(col,spin,space));
+
+TEST(svc_fun,tensor(spin,space,col));
+
+TEST(hyp_fun,tensor(col)(spin)(space));
+
+TEST(triv_fun,tensor.trivialAccess(spin,space,col,vol));
+
 int main()
 {
-  int64_t vol;
   cout<<"Please enter volume: ";
   cin>>vol;
   
@@ -234,31 +271,46 @@ int main()
   ColorIdx col;
   cin>>col;
   
-  asm("#here accessing (spin,space,col)");
+  __asm volatile ("");
+  double& hyp=hyp_fun(tensor,spin,col,space);
   
+  asm("#here accessing (spin,space,col)");
+  cin>>spin;
+  cin>>space;
+  cin>>col;
+  __asm volatile ("");
+    
   /// Spin,space,color access
-  double svc=tensor(spin,space,col);
+  double& svc=svc_fun(tensor,spin,col,space);
   
   asm("#here accessing (col,spin,space)");
-  
+  cin>>spin;
+  cin>>space;
+  cin>>col;
+  __asm volatile ("");
   /// Color,spin,space access
-  double csv=tensor(col,spin,space);
+  double& csv=csv_fun(tensor,spin,col,space);
   
   asm("#here accessing sequentially");
+  cin>>spin;
+  cin>>space;
+  cin>>col;
+  __asm volatile ("");
   
   /// Color,spin,space access
-  auto colBind=bind(tensor,col);
-  auto spinColBind=bind(colBind,spin);
-  double seq=spinColBind(space);
+  double& seq=seq_fun(tensor,spin,col,space);
   
   asm("#here accessing trivially");
-  
+  cin>>spin;
+  cin>>space;
+  cin>>col;
+  __asm volatile ("");
   /// Trivial spin access
-  double t=tensor.trivialAccess(spin,space,col,vol);
+  double& t=triv_fun(tensor,spin,col,space);
   
   asm("#here printing");
   
-  cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" expected: "<<col+3*(space+vol*spin)<<endl;
+  cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
   return 0;
 }
