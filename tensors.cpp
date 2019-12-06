@@ -37,10 +37,14 @@ struct _Spin
   static constexpr int64_t sizeAtCompileTime=4;
 };
 
+enum RowCol{ROW,COL};
+
 /// Tensor component defined by base type S
 ///
 /// Inherit from S to get size
-template <typename S>
+template <typename S,
+	  RowCol RC=ROW,
+	  int Which=0>
 struct TensorCompIdx
 {
   typedef S Base;
@@ -72,21 +76,30 @@ struct TensorCompIdx
 };
 
 /// Space index
-using SpaceIdx=TensorCompIdx<_Space>;
+template <RowCol RC=ROW,
+	  int Which=0>
+using SpaceIdx=TensorCompIdx<_Space,RC,Which>;
 
 /// Spin index
-using SpinIdx=TensorCompIdx<_Spin>;
+template <RowCol RC=ROW,
+	  int Which=0>
+using SpinIdx=TensorCompIdx<_Spin,RC,Which>;
 
 /// Color index
-using ColorIdx=TensorCompIdx<_Color>;
+template <RowCol RC=ROW,
+	  int Which=0>
+using ColorIdx=TensorCompIdx<_Color,RC,Which>;
+
+template <typename T>
+using RefOrVal=std::conditional_t<std::is_lvalue_reference<T>::value,T&,T>;
 
 template <typename T,
 	  typename C>
 struct Bind
 {
-  std::conditional_t<std::is_lvalue_reference<T>::value,T&,T> ref;
+  RefOrVal<T> ref;
   
-  C val;
+  RefOrVal<C> val;
   
   template <typename...Tail>
   decltype(auto) operator()(Tail&&...tail)
@@ -223,7 +236,7 @@ public:
 };
 
 #define TEST(NAME,...)							\
-  double& NAME(Tens<SpinIdx,SpaceIdx,ColorIdx>& tensor,SpinIdx spin,ColorIdx col,SpaceIdx space) \
+  double& NAME(Tens<SpinIdx<ROW>,SpaceIdx<ROW>,ColorIdx<ROW>>& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx<ROW> space) \
   {									\
     asm("#here " #NAME "  access");					\
     return __VA_ARGS__;							\
@@ -248,67 +261,42 @@ int main()
   cin>>vol;
   
   /// Spindolor
-  Tens<SpinIdx,SpaceIdx,ColorIdx> tensor(SpaceIdx{vol});
+  Tens<SpinIdx<ROW>,SpaceIdx<ROW>,ColorIdx<ROW>> tensor(SpaceIdx<ROW>{vol});
   
   /// Fill the spincolor with flattened index
-  for(SpinIdx s(0);s<4;s++)
-    for(SpaceIdx v(0);v<vol;v++)
-      for(ColorIdx c(0);c<3;c++)
+  for(SpinIdx<ROW> s(0);s<4;s++)
+    for(SpaceIdx<ROW> v(0);v<vol;v++)
+      for(ColorIdx<ROW> c(0);c<3;c++)
 	tensor(s,v,c)=c+3*(v+vol*s);
   
   // Read components to access
   cout<<"Please enter spin, space and color index to printout: ";
   
   /// Spin component
-  SpinIdx spin;
+  SpinIdx<ROW> spin;
   cin>>spin;
   
   /// Space component
-  SpaceIdx space;
+  SpaceIdx<ROW> space;
   cin>>space;
   
   /// Color component
-  ColorIdx col;
+  ColorIdx<ROW> col;
   cin>>col;
   
-  __asm volatile ("");
   double& hyp=hyp_fun(tensor,spin,col,space);
   
-  asm("#here accessing (spin,space,col)");
-  cin>>spin;
-  cin>>space;
-  cin>>col;
-  __asm volatile ("");
-    
   /// Spin,space,color access
   double& svc=svc_fun(tensor,spin,col,space);
   
-  asm("#here accessing (col,spin,space)");
-  cin>>spin;
-  cin>>space;
-  cin>>col;
-  __asm volatile ("");
   /// Color,spin,space access
   double& csv=csv_fun(tensor,spin,col,space);
-  
-  asm("#here accessing sequentially");
-  cin>>spin;
-  cin>>space;
-  cin>>col;
-  __asm volatile ("");
   
   /// Color,spin,space access
   double& seq=seq_fun(tensor,spin,col,space);
   
-  asm("#here accessing trivially");
-  cin>>spin;
-  cin>>space;
-  cin>>col;
-  __asm volatile ("");
   /// Trivial spin access
   double& t=triv_fun(tensor,spin,col,space);
-  
-  asm("#here printing");
   
   cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
