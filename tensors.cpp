@@ -5,7 +5,7 @@
 using namespace std;
 
 /// Compute the product of the passed list of T values
-template <typename T>
+template <typename T=int64_t>
 constexpr T product(const std::initializer_list<T>& list)
 {
   /// Result
@@ -73,6 +73,11 @@ struct TensorCompIdx
   {
     return i;
   }
+  
+  auto transp() const
+  {
+    return TensorCompIdx<S,(RC==ROW)?COL:ROW,Which>{i};
+  }
 };
 
 /// Space index
@@ -94,22 +99,30 @@ template <typename T>
 using RefOrVal=std::conditional_t<std::is_lvalue_reference<T>::value,T&,T>;
 
 template <typename T,
-	  typename C>
+	  typename...C>
 struct Bind
 {
   RefOrVal<T> ref;
   
-  RefOrVal<C> val;
+  std::tuple<RefOrVal<C>...> vals;
   
   template <typename...Tail>
   decltype(auto) operator()(Tail&&...tail)
   {
-    return ref(val,std::forward<Tail>(tail)...);
+    return ref(std::get<C>(vals)...,std::forward<Tail>(tail)...);
+  }
+  
+  template <typename F,
+	    typename...Tail>
+  decltype(auto) call(F&& f,
+		      Tail&&...tail)
+  {
+    return f(ref,std::get<C>(vals)...,std::forward<Tail>(tail)...);
   }
   
   Bind(T&& ref,
-       C&& val)
-    : ref(ref),val(val)
+       C&&...vals)
+    : ref(ref),vals{vals...}
   {
   }
 };
@@ -121,13 +134,20 @@ auto bind(T&& ref)
 }
 
 template <typename T,
-	  typename Head,
-	  typename...Tail>
+	  typename...Tp>
 auto bind(T&& ref,
-	  Head&& head,
-	  Tail&&...tail)
+	  Tp&&...comps)
 {
-  return bind(Bind<T,Head>(std::forward<T>(ref),std::forward<Head>(head)),std::forward<Tail>(tail)...);
+  return Bind<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
+}
+
+template <typename T,
+	  typename...Head,
+	  typename...Tail>
+auto bind(Bind<T,Head...> ref,
+	  Tail&&...comps)
+{
+  return ref(std::forward<Tail>(comps)...);
 }
 
 /// Tensor
@@ -297,6 +317,18 @@ int main()
   
   /// Trivial spin access
   double& t=triv_fun(tensor,spin,col,space);
+  
+  using SU3=Tens<ColorIdx<ROW>,ColorIdx<COL>>;
+  
+  SU3 link1,link2,link3;
+  
+  for(ColorIdx<ROW> i1{0};i1<3;i1++)
+    for(ColorIdx<COL> k2{0};k2<3;k2++)
+      {
+	link3(i1,k2)=0.0;
+	for(ColorIdx<COL> i2(0);i2<3;i2++)
+	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
+      }
   
   cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
