@@ -1,8 +1,74 @@
 #include <iostream>
 #include <memory>
 #include <tuple>
+#include <utility>
 
-using namespace std;
+#if __cplusplus > 201402L
+
+using std::as_const;
+
+#else
+
+template <class T>
+constexpr const T& as_const(T& t) noexcept
+{
+  return t;
+}
+
+#endif
+
+/// Remove \c const qualifier from anything
+///
+/// \todo  Check that  the  "dangling  reference forbidding"  below,
+/// currently not working, is not actually necessary
+template <typename T>
+constexpr T& as_mutable(const T& v) noexcept
+{
+  return const_cast<T&>(v);
+}
+
+/// Provides also a non-const version of the method \c NAME
+///
+/// See
+/// https://stackoverflow.com/questions/123758/how-do-i-remove-code-duplication-between-similar-const-and-non-const-member-func
+/// A const method NAME must be already present Example
+///
+/// \code
+// class ciccio
+/// {
+///   double e{0};
+///
+/// public:
+///
+///   const double& get() const
+///   {
+///     return e;
+///   }
+///
+///   PROVIDE_ALSO_NON_CONST_METHOD(get);
+/// };
+/// \endcode
+#define PROVIDE_ALSO_NON_CONST_METHOD(NAME)				\
+  /*! Overload the \c NAME const method passing all args             */ \
+  template <typename...Ts> /* Type of all arguments                  */	\
+  decltype(auto) NAME(Ts&&...ts) /*!< Arguments                      */ \
+  {									\
+    return as_mutable(as_const(*this).NAME(std::forward<Ts>(ts)...)); \
+  }
+
+template <typename T>
+struct Crtp
+{
+  const T& operator~() const
+  {
+    return *static_cast<const T*>(this);
+  }
+  
+  T& operator~()
+  {
+    return *static_cast<T*>(this);
+  }
+};
 
 /// Compute the product of the passed list of T values
 template <typename T=int64_t>
@@ -13,6 +79,7 @@ constexpr T product(const std::initializer_list<T>& list)
   
   for(auto i : list)
     out*=i;
+  
   return out;
 }
 
@@ -107,10 +174,13 @@ struct Bind
   std::tuple<RefOrVal<C>...> vals;
   
   template <typename...Tail>
-  decltype(auto) operator()(Tail&&...tail)
+  decltype(auto) operator()(Tail&&...tail) const
   {
     return ref(std::get<C>(vals)...,std::forward<Tail>(tail)...);
   }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator());
+  
   
   template <typename F,
 	    typename...Tail>
@@ -121,10 +191,12 @@ struct Bind
   }
   
   template <typename S>
-  decltype(auto) operator[](S&& s)
+  decltype(auto) operator[](S&& s) const
   {
     return (*this)(std::forward<S>(s));
   }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
   
   Bind(T&& ref,
        C&&...vals)
@@ -219,7 +291,7 @@ public:
   Tens(TD&&...td)
   {
     const int64_t dynamicSize=product({initSize<TD>(std::forward<TD>(td))...});
-    const int64_t staticSize=abs(product({TC::Base::sizeAtCompileTime...}));
+    const int64_t staticSize=labs(product({TC::Base::sizeAtCompileTime...}));
     size=dynamicSize*staticSize;
     //cout<<"Total size: "<<size<<endl;
     
@@ -282,6 +354,10 @@ TEST(triv_fun,tensor.trivialAccess(spin,space,col,vol));
 
 int main()
 {
+  using std::cout;
+  using std::cin;
+  using std::endl;
+  
   cout<<"Please enter volume: ";
   cin>>vol;
   
