@@ -141,15 +141,6 @@ auto bind(T&& ref,
   return Bind<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
 }
 
-template <typename T,
-	  typename...Head,
-	  typename...Tail>
-auto bind(Bind<T,Head...> ref,
-	  Tail&&...comps)
-{
-  return ref(std::forward<Tail>(comps)...);
-}
-
 /// Tensor
 template <typename...TC>
 class Tens
@@ -319,7 +310,7 @@ int main()
   double& t=triv_fun(tensor,spin,col,space);
   
   using SU3=Tens<ColorIdx<ROW>,ColorIdx<COL>>;
-  
+    
   SU3 link1,link2,link3;
   
   for(ColorIdx<ROW> i1{0};i1<3;i1++)
