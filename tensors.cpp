@@ -120,6 +120,12 @@ struct Bind
     return f(ref,std::get<C>(vals)...,std::forward<Tail>(tail)...);
   }
   
+  template <typename S>
+  decltype(auto) operator[](S&& s)
+  {
+    return (*this)(std::forward<S>(s));
+  }
+  
   Bind(T&& ref,
        C&&...vals)
     : ref(ref),vals{vals...}
@@ -239,6 +245,12 @@ public:
     return data[i];
   }
   
+  template <typename T>
+  decltype(auto) operator[](T&& t)
+  {
+    return (*this)(std::forward<T>(t));
+  }
+  
   /// Gives trivial access
   double& trivialAccess(int64_t iSpin,int64_t iSpace,int64_t iCol,int64_t vol)
   {
@@ -257,6 +269,8 @@ int64_t vol;
 
 
 TEST(seq_fun,bind(bind(tensor,col),spin)(space))
+
+TEST(bra_fun,tensor[col][spin][space])
 
 TEST(csv_fun,tensor(col,spin,space));
 
@@ -306,11 +320,14 @@ int main()
   /// Color,spin,space access
   double& seq=seq_fun(tensor,spin,col,space);
   
+  /// Color,spin,space access with []
+  double& bra=bra_fun(tensor,spin,col,space);
+  
   /// Trivial spin access
   double& t=triv_fun(tensor,spin,col,space);
   
   using SU3=Tens<ColorIdx<ROW>,ColorIdx<COL>>;
-    
+  
   SU3 link1,link2,link3;
   
   for(ColorIdx<ROW> i1{0};i1<3;i1++)
@@ -321,7 +338,7 @@ int main()
 	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
       }
   
-  cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" expected: "<<col+3*(space+vol*spin)<<endl;
+  cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" "<<bra<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
   return 0;
 }
