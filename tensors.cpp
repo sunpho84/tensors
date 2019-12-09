@@ -60,6 +60,66 @@ using ref_or_val_t=std::conditional_t<std::is_lvalue_reference<T>::value,T&,T>;
     return remove_const_if_ref(as_const(*this).NAME(std::forward<Ts>(ts)...)); \
   }
 
+/// Filter a tuple on the basis of a predicate on the type
+///
+/// Internal implementation working out a single type, forward
+/// declaration
+template <bool,
+	  typename>
+struct _TupleFilter;
+
+/// Filter a tuple on the basis of a predicate
+///
+/// True case, in which the type is filtered
+template <typename T>
+struct _TupleFilter<true,T>
+{
+  /// Helper type, used to cat the results
+  using type=std::tuple<T>;
+  
+  /// Filtered value
+  const type value;
+  
+  /// Construct, taking a tuple type and filtering the valid casis
+  template <typename Tp>
+  _TupleFilter(Tp&& t) : ///< Tuple to filter
+    value{std::get<T>(t)}
+  {
+  }
+};
+
+/// Filter a tuple on the basis of a predicate
+///
+/// True case, in which the type is filtered out
+template <typename T>
+struct _TupleFilter<false,T>
+{
+  /// Helper empty type, used to cat the results
+  using type=std::tuple<>;
+  
+  /// Empty value
+  const type value;
+  
+  /// Construct without getting the type
+  template <typename Tp>
+  _TupleFilter(Tp&& t) ///< Tuple to filter
+  {
+  }
+};
+
+/// Returns a tuple, filtering out the non needed types
+template <template <class> class F,          // Predicate to be applied on the types
+	  typename...T>                      // Types contained in the tuple to be filtered
+auto tupleFilter(const std::tuple<T...>& t) ///< Tuple to filter
+{
+  return std::tuple_cat(_TupleFilter<F<T>::value,T>{t}.value...);
+}
+
+/// Type obtained applying the predicate filter F on the tuple T
+template <template <class> class F,
+	  typename T>
+using TupleFilter=decltype(tupleFilter<F>(T{}));
+
 template <typename T>
 struct Crtp
 {
@@ -77,7 +137,7 @@ struct Crtp
 /// Compute the product of the passed list of T values
 template <typename T,
 	  typename...Ts>
-constexpr T product(Ts&&...list)
+constexpr T prodsuct(Ts&&...list)
 {
   /// Result
   T out=1;
@@ -92,49 +152,60 @@ constexpr T product(Ts&&...list)
 
 /// Compute the product of the passed list of T values
 template <typename F,
-	  typename T=int64_t>
+	  typename T,
+	  typename...Ts>
 constexpr T combine(F&& f,
 		    const T& init,
-		    const std::initializer_list<T>& list)
+		    Ts&&...list)
 {
   /// Result
   T out=init;
+
+  const T l[]{list...};
   
-  for(auto i : list)
+  for(auto i : l)
     out=f(out,i);
   
   return out;
 }
 
-// template <typename F,
-// 	  typename...T>
-// constexpr auto product(T&&...t)
-// {
-//   return combine(std::multiplies<>(),1,std::forward<T>(t)...);
-// }
+template <typename T,
+	  typename...Ts>
+constexpr auto product(Ts&&...t)
+{
+  return combine(std::multiplies<>(),T{1},std::forward<Ts>(t)...);
+}
+
+///Type used to specify size
+using Size=int64_t;
 
 /// Dynamic size
-enum{DYNAMIC=-1};
+constexpr Size DYNAMIC=-1;
 
-/// Base type for a space index
-struct _Space
+/// Specify the size at compile time
+template <Size SIZE=DYNAMIC>
+struct TensCompSize
 {
   /// Value beyond end
-  enum{sizeAtCompileTime=DYNAMIC};
+  static constexpr Size sizeAtCompileTime()
+  {
+    return SIZE;
+  };
+};
+
+/// Base type for a space index
+struct _Space : public TensCompSize<>
+{
 };
 
 /// Base type for a color index
-struct _Color
+struct _Color : public TensCompSize<3>
 {
-  /// Value beyond end
-  enum{sizeAtCompileTime=3};
 };
 
 /// Base type for a spin index
-struct _Spin
+struct _Spin : public TensCompSize<4>
 {
-  /// Value beyond end
-  enum{sizeAtCompileTime=4};
 };
 
 /// Row or column
@@ -152,13 +223,13 @@ struct TensorCompIdx
   typedef S Base;
   
   /// Value
-  int64_t i;
+  Size i;
   
   /// Check if the size is known at compile time
-  static constexpr bool SizeKnownAtCompileTime=Base::sizeAtCompileTime!=DYNAMIC;
+  static constexpr bool SizeIsKnownAtCompileTime=Base::sizeAtCompileTime()!=DYNAMIC;
   
   /// Init from int
-  explicit TensorCompIdx(int64_t i) : i(i)
+  explicit TensorCompIdx(Size i) : i(i)
   {
   }
   
@@ -168,13 +239,13 @@ struct TensorCompIdx
   }
   
   /// Convert to actual value
-  operator int64_t&()
+  operator Size&()
   {
     return i;
   }
   
   /// Convert to actual value
-  operator const int64_t&() const
+  operator const Size&() const
   {
     return i;
   }
@@ -184,6 +255,19 @@ struct TensorCompIdx
   {
     return TensorCompIdx<S,(RC==ROW)?COL:ROW,Which>{i};
   }
+};
+
+/// Predicate returning whether the size is known ow not at compile time
+template <bool Asked=true>
+struct SizeIsKnownAtCompileTime
+{
+  /// Internal implementation
+  template <typename T>
+  struct t
+  {
+    /// Predicate result
+    static constexpr bool value=(T::SizeIsKnownAtCompileTime==Asked);
+  };
 };
 
 /// Collection of components
@@ -276,13 +360,31 @@ template <typename Fund,
 	  typename...TC>
 class Tens<TensComps<TC...>,Fund>
 {
-  /// Sizes of the components
-  TensComps<TC...> sizes;
+  using StaticComps=TupleFilter<SizeIsKnownAtCompileTime<true>::t,TensComps<TC...>>;
+  
+  using DynamicComps=TupleFilter<SizeIsKnownAtCompileTime<false>::t,TensComps<TC...>>;
+  
+  /// Sizes of the dynamic components
+  const DynamicComps dynSizes;
   
   /// Calculate the index - no more components to parse
-  int64_t index(int64_t outer) const ///< Value of all the outer components
+  Size index(Size outer) const ///< Value of all the outer components
   {
     return outer;
+  }
+  
+  template <typename Tv,
+	    std::enable_if_t<Tv::SizeIsKnownAtCompileTime,void*> =nullptr>
+  constexpr Size compSize() const
+  {
+    return Tv::Base::sizeAtCompileTime();
+  }
+  
+  template <typename Tv,
+	    std::enable_if_t<not Tv::SizeIsKnownAtCompileTime,void*> =nullptr>
+  const Size& compSize() const
+  {
+    return std::get<Tv>(dynSizes);
   }
   
   /// Calculate index iteratively
@@ -297,26 +399,27 @@ class Tens<TensComps<TC...>,Fund>
   /// components. The first step requires outer=0.
   template <typename T,
 	    typename...Tp>
-  int64_t index(int64_t outer,      ///< Value of all the outer components
-		T&& thisComp,       ///< Currently parsed component
-		Tp&&...innerComps)  ///< Inner components
+  Size index(Size outer,      ///< Value of all the outer components
+	     T&& thisComp,       ///< Currently parsed component
+	     Tp&&...innerComps)  ///< Inner components
     const
   {
-    constexpr int64_t i=std::remove_reference_t<T>::Base::sizeAtCompileTime;
+    /// Remove reference to access to types
+    using Tv=std::remove_reference_t<T>;
     
     /// Size of this component
-    const int64_t thisSize=(i>0)?i:std::get<std::remove_reference_t<T>>(sizes);
+    const Size thisSize=compSize<Tv>();
     
     //cout<<"thisSize: "<<thisSize<<endl;
     /// Value of the index when including this component
-    const int64_t thisVal=outer*thisSize+thisComp;
+    const Size thisVal=outer*thisSize+thisComp;
     
     return index(thisVal,innerComps...);
   }
   
   /// Intermediate layer to reorder the passed components
   template <typename...Cp>
-  int64_t reorderedIndex(Cp&&...comps) const
+  Size reorderedIndex(Cp&&...comps) const
   {
     /// Put the arguments in atuple
     auto argsInATuple=std::make_tuple(std::forward<Cp>(comps)...);
@@ -326,35 +429,45 @@ class Tens<TensComps<TC...>,Fund>
   }
   
   /// Compute the data size
-  int64_t size;
+  Size size;
   
   /// Storage
   std::unique_ptr<Fund[]> data;
   
-  /// Compute the size needed to initialize the tensor
-  template <typename T>
-  int64_t initSize(int64_t s)
+  template <typename Ds,
+	    typename Out>
+  Size initializeDynSize(const Ds& inputs,
+			 Out& out)
   {
-    /// Compile-time size
-    constexpr int64_t cs=T::Base::sizeAtCompileTime;
+    out=std::get<Out>(inputs);
     
-    (int64_t&)(std::get<T>(sizes))=(cs>0)?cs:s;
+    return out;
+  }
+  
+  /// Compute the size needed to initialize the tensor and set it
+  template <typename...Td,
+	    typename...T>
+  TensComps<Td...> initializeDynSizes(TensComps<Td...>*,
+				      T&&...in)
+  {
+    static_assert(sizeof...(T)==sizeof...(Td),"Number of passed dynamic sizes not matching the needed one");
     
-    return std::get<T>(sizes);
+    return {std::get<Td>(std::make_tuple(in...))...};
   }
   
 public:
   
+  static constexpr bool allCompsStatic=std::is_same<DynamicComps,std::tuple<>>::value;
+  
   /// Initialize the tensor with the knowledge of the dynamic size
-  template <typename...TD,
-	    std::enable_if_t<product<int64_t>(not TD::SizeKnownAtCompileTime...),void*> =nullptr>
-  Tens(TD&&...td)
+  template <typename...TD>
+  Tens(TD&&...td) : dynSizes{initializeDynSizes((DynamicComps*)nullptr,std::forward<TD>(td)...)}
   {
     /// Dynamic size
-    const int64_t dynamicSize=product<int64_t>(initSize<TD>(std::forward<TD>(td))...);
+    const Size dynamicSize=product<Size>(std::forward<TD>(td)...);
     
     /// Static size
-    const int64_t staticSize=labs(product<int64_t>(TC::Base::sizeAtCompileTime...));
+    const Size staticSize=labs(product<Size>(TC::Base::sizeAtCompileTime()...));
     
     size=dynamicSize*staticSize;
     //cout<<"Total size: "<<size<<endl;
@@ -375,7 +488,7 @@ public:
 	    std::enable_if_t<sizeof...(Cp)==sizeof...(TC),void*> =nullptr>
   Fund& operator()(Cp&&...comps) const ///< Components
   {
-    const int64_t i=reorderedIndex(std::forward<Cp>(comps)...);
+    const Size i=reorderedIndex(std::forward<Cp>(comps)...);
     
     //cout<<"Index: "<<i<<endl;
     return data[i];
@@ -393,7 +506,7 @@ public:
   PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
   
   /// Provide trivial access to the fundamental data
-  Fund& trivialAccess(const int64_t& i) const
+  Fund& trivialAccess(const Size& i) const
   {
     return data[i];
   }
@@ -417,7 +530,7 @@ using SpinColorFieldD=SpinColorField<double>;
     return __VA_ARGS__;							\
   }
 
-int64_t vol;
+Size vol;
 
 TEST(seq_fun,bind(bind(tensor,col),spin)(space))
 
@@ -496,6 +609,9 @@ int main()
       }
   
   cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" "<<bra<<" expected: "<<col+3*(space+vol*spin)<<endl;
+  
+  cout<<SpinColorFieldD::allCompsStatic<<endl;
+  cout<<SU3::allCompsStatic<<endl;
   
   return 0;
 }
