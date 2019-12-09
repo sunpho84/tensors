@@ -216,7 +216,7 @@ struct _Compl : public TensCompSize<2>
 };
 
 /// Row or column
-enum RowCol{ROW,COL};
+enum RowCol{ROW,COL,ANY};
 
 /// Tensor component defined by base type S
 ///
@@ -257,10 +257,24 @@ struct TensorCompIdx
     return i;
   }
   
+  static constexpr RowCol _transp(const RowCol& rc)
+  {
+    switch(rc)
+      {
+      case ROW:
+	return COL;
+	break;
+      case COL:
+	return ROW;
+      default:
+	return ANY;
+      }
+  }
+  
   /// Transposed index
   auto transp() const
   {
-    return TensorCompIdx<S,(RC==ROW)?COL:ROW,Which>{i};
+    return TensorCompIdx<S,_transp(RC),Which>{i};
   }
 };
 
@@ -297,7 +311,7 @@ template <RowCol RC=ROW,
 using ColorIdx=TensorCompIdx<_Color,RC,Which>;
 
 /// Complex index
-template <RowCol RC=ROW,
+template <RowCol RC=ANY,
 	  int Which=0>
 using ComplIdx=TensorCompIdx<_Compl,RC,Which>;
 
@@ -578,7 +592,7 @@ public:
 
 /////////////////////////////////////////////////////////////////
 
-using SpinSpaceColor=TensComps<SpinIdx<ROW>,SpaceIdx<ROW>,ColorIdx<ROW>>;
+using SpinSpaceColor=TensComps<SpinIdx<ROW>,SpaceIdx<ANY>,ColorIdx<ROW>>;
 
 template <typename Fund>
 using SpinColorField=Tens<SpinSpaceColor,Fund>;
@@ -586,13 +600,13 @@ using SpinColorField=Tens<SpinSpaceColor,Fund>;
 using SpinColorFieldD=SpinColorField<double>;
 
 #define TEST(NAME,...)							\
-  double& NAME(SpinColorFieldD& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx<ROW> space) \
+  double& NAME(SpinColorFieldD& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx<ANY> space) \
   {									\
     asm("#here " #NAME "  access");					\
     return __VA_ARGS__;							\
   }
 
-Size vol;
+SpaceIdx<ANY> vol;
 
 TEST(seq_fun,bind(bind(tensor,col),spin)(space))
 
@@ -613,6 +627,22 @@ void test_if_ref(T&& t)
   std::cout<<"ECCO "<<b<<std::endl;
 }
 
+template <typename TOut,
+	  typename TIn1,
+	  typename TIn2>
+void unsafe_su3_prod(TOut&& out,const TIn1& in1,const TIn2& in2)
+{
+  SpaceIdx<ANY> s(0);
+  
+  for(ColorIdx<ROW> i1{0};i1<3;i1++)
+    for(ColorIdx<COL> k2{0};k2<3;k2++)
+      {
+  	out(i1,k2,s)=0.0;
+  	for(ColorIdx<COL> i2(0);i2<3;i2++)
+  	  out(i1,k2,s)+=in1(i1,i2,s)*in2(i2.transp(),k2,s);
+      }
+}
+
 int main()
 {
   using std::cout;
@@ -623,11 +653,11 @@ int main()
   cin>>vol;
   
   /// Spinspacecolor
-  Tens<SpinSpaceColor,double> tensor(SpaceIdx<ROW>{vol});
+  Tens<SpinSpaceColor,double> tensor(vol);
   
   /// Fill the spincolor with flattened index
   for(SpinIdx<ROW> s(0);s<4;s++)
-    for(SpaceIdx<ROW> v(0);v<vol;v++)
+    for(SpaceIdx<ANY> v(0);v<vol;v++)
       for(ColorIdx<ROW> c(0);c<3;c++)
   	tensor(s,v,c)=c+3*(v+vol*s);
   
@@ -639,7 +669,7 @@ int main()
   cin>>spin;
   
   /// Space component
-  SpaceIdx<ROW> space;
+  SpaceIdx<ANY> space;
   cin>>space;
   
   /// Color component
@@ -663,11 +693,11 @@ int main()
   /// Trivial spin access
   double& t=triv_fun(tensor,spin,col,space);
   
-  using SU3Comps=TensComps<ColorIdx<ROW>,ColorIdx<COL>>;
+  using SU3FieldComps=TensComps<ColorIdx<ROW>,ColorIdx<COL>,SpaceIdx<ANY>>;
   
-  using SU3=Tens<SU3Comps,double>;
+  using SU3Field=Tens<SU3FieldComps,double>;
   
-  SU3 link1,link2,link3;
+  SU3Field conf1(vol),conf2(vol),conf3(vol);
   
   using ComplComps=TensComps<ComplIdx<ROW>>;
   
@@ -676,15 +706,15 @@ int main()
   Tens<ComplComps,double> test;
   test.trivialAccess(0)=0.0;
   
-  for(ColorIdx<ROW> i1{0};i1<3;i1++)
-    for(ColorIdx<COL> k2{0};k2<3;k2++)
-      {
-  	link3(i1,k2)=0.0;
-  	for(ColorIdx<COL> i2(0);i2<3;i2++)
-  	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
-      }
+    for(SpaceIdx<ANY> v(0);v<vol;v++)
+      for(ColorIdx<ROW> c1(0);c1<3;c1++)
+	for(ColorIdx<COL> c2(0);c2<3;c2++)
+	  conf1(space,c1,c2)=conf2(space,c1,c2)=conf3(space,c1,c2)=0.0;
+  
+  unsafe_su3_prod(conf1,conf2,conf3);
   
   cout<<"Test:";
+  cout<<" "<<conf1[space][col][col.transp()];
   cout<<" "<<svc;
   cout<<" "<<csv;
   cout<<" "<<t;
@@ -694,7 +724,7 @@ int main()
   cout<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
   cout<<SpinColorFieldD::stackAllocated<<endl;
-  cout<<SU3::stackAllocated<<endl;
+  cout<<SU3Field::stackAllocated<<endl;
   
   return 0;
 }
