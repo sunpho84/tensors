@@ -134,21 +134,21 @@ struct Crtp
   }
 };
 
-/// Compute the product of the passed list of T values
-template <typename T,
-	  typename...Ts>
-constexpr T prodsuct(Ts&&...list)
-{
-  /// Result
-  T out=1;
+// /// Compute the product of the passed list of T values
+// template <typename T,
+// 	  typename...Ts>
+// constexpr T prodsuct(Ts&&...list)
+// {
+//   /// Result
+//   T out=1;
   
-  const T l[]{list...};
+//   const T l[]{list...};
   
-  for(auto i : l)
-    out*=i;
+//   for(auto i : l)
+//     out*=i;
   
-  return out;
-}
+//   return out;
+// }
 
 /// Compute the product of the passed list of T values
 template <typename F,
@@ -350,6 +350,52 @@ auto bind(T&& ref,       ///< Reference
   return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
 }
 
+template <typename Fund,
+	  Size StaticSize,
+	  bool AllStatic>
+struct TensStorage
+{
+  struct DynamicStorage
+  {
+    /// Storage
+    std::unique_ptr<Fund[]> data;
+    
+    DynamicStorage(const Size& dynSize) : data(new Fund[StaticSize*dynSize])
+    {
+    }
+  };
+  
+  struct StackStorage
+  {
+    /// Storage
+    Fund data[StaticSize];
+    
+    StackStorage(const Size&)
+    {
+    }
+  };
+  
+  static constexpr Size MAX_STACK_SIZE=2304;
+  
+  static constexpr bool stackAllocated=AllStatic and StaticSize*sizeof(Fund)<=MAX_STACK_SIZE;
+  
+  std::conditional_t<stackAllocated,StackStorage,DynamicStorage> data;
+  
+  TensStorage(const Size& size) : data(size)
+  {
+  }
+  
+  /// Single component access via subscribe operator
+  template <typename T>                   // Subscribed component type
+  auto& operator[](const T& t) const  ///< Subscribed component
+  {
+    return data.data[t];
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
+  
+};
+
 /// Tensor with Comps components, of Fund funamental type
 template <typename Comps,
 	  typename Fund>
@@ -365,7 +411,10 @@ class Tens<TensComps<TC...>,Fund>
   using DynamicComps=TupleFilter<SizeIsKnownAtCompileTime<false>::t,TensComps<TC...>>;
   
   /// Sizes of the dynamic components
-  const DynamicComps dynSizes;
+  const DynamicComps dynamicSizes;
+  
+  /// Static size
+  static constexpr Size staticSize=product<Size>((TC::SizeIsKnownAtCompileTime?TC::Base::sizeAtCompileTime():1)...);
   
   /// Calculate the index - no more components to parse
   Size index(Size outer) const ///< Value of all the outer components
@@ -384,7 +433,7 @@ class Tens<TensComps<TC...>,Fund>
 	    std::enable_if_t<not Tv::SizeIsKnownAtCompileTime,void*> =nullptr>
   const Size& compSize() const
   {
-    return std::get<Tv>(dynSizes);
+    return std::get<Tv>(dynamicSizes);
   }
   
   /// Calculate index iteratively
@@ -431,8 +480,10 @@ class Tens<TensComps<TC...>,Fund>
   /// Compute the data size
   Size size;
   
+  static constexpr bool allCompsAreStatic=std::is_same<DynamicComps,std::tuple<>>::value;
+  
   /// Storage
-  std::unique_ptr<Fund[]> data;
+  TensStorage<Fund,staticSize,allCompsAreStatic> data;
   
   template <typename Ds,
 	    typename Out>
@@ -457,28 +508,27 @@ class Tens<TensComps<TC...>,Fund>
   
 public:
   
-  static constexpr bool allCompsStatic=std::is_same<DynamicComps,std::tuple<>>::value;
+  static constexpr bool stackAllocated=decltype(data)::stackAllocated;
   
   /// Initialize the tensor with the knowledge of the dynamic size
   template <typename...TD>
-  Tens(TD&&...td) : dynSizes{initializeDynSizes((DynamicComps*)nullptr,std::forward<TD>(td)...)}
+  Tens(TD&&...td) :
+    dynamicSizes{initializeDynSizes((DynamicComps*)nullptr,std::forward<TD>(td)...)},
+    data(product<Size>(std::forward<TD>(td)...))
   {
     /// Dynamic size
-    const Size dynamicSize=product<Size>(std::forward<TD>(td)...);
+    //const Size dynamicSize=product<Size>(std::forward<TD>(td)...);
     
-    /// Static size
-    const Size staticSize=labs(product<Size>(TC::Base::sizeAtCompileTime()...));
-    
-    size=dynamicSize*staticSize;
+    //size=dynamicSize*staticSize;
     //cout<<"Total size: "<<size<<endl;
     
-    data=std::unique_ptr<Fund[]>(new Fund[size]);
+    //data=std::unique_ptr<Fund[]>(new Fund[size]);
   }
   
   /// Access to inner data with any order
   template <typename...Cp,
 	    std::enable_if_t<sizeof...(Cp)!=sizeof...(TC),void*> =nullptr>
-  auto operator()(Cp&&...comps) const ///< Components
+  decltype(auto) operator()(Cp&&...comps) const ///< Components
   {
     return bind(*this,comps...);
   }
@@ -486,7 +536,7 @@ public:
   /// Access to inner data with any order
   template <typename...Cp,
 	    std::enable_if_t<sizeof...(Cp)==sizeof...(TC),void*> =nullptr>
-  Fund& operator()(Cp&&...comps) const ///< Components
+  decltype(auto) operator()(Cp&&...comps) const ///< Components
   {
     const Size i=reorderedIndex(std::forward<Cp>(comps)...);
     
@@ -600,18 +650,18 @@ int main()
   
   SU3 link1,link2,link3;
   
-  for(ColorIdx<ROW> i1{0};i1<3;i1++)
-    for(ColorIdx<COL> k2{0};k2<3;k2++)
-      {
-	link3(i1,k2)=0.0;
-	for(ColorIdx<COL> i2(0);i2<3;i2++)
-	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
-      }
+  // for(ColorIdx<ROW> i1{0};i1<3;i1++)
+  //   for(ColorIdx<COL> k2{0};k2<3;k2++)
+  //     {
+  // 	link3(i1,k2)=0.0;
+  // 	for(ColorIdx<COL> i2(0);i2<3;i2++)
+  // 	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
+  //     }
   
   cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" "<<bra<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
-  cout<<SpinColorFieldD::allCompsStatic<<endl;
-  cout<<SU3::allCompsStatic<<endl;
+  cout<<SpinColorFieldD::stackAllocated<<endl;
+  cout<<SU3::stackAllocated<<endl;
   
   return 0;
 }
