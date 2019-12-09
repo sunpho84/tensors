@@ -75,40 +75,66 @@ struct Crtp
 };
 
 /// Compute the product of the passed list of T values
-template <typename T=int64_t>
-constexpr T product(const std::initializer_list<T>& list)
+template <typename T,
+	  typename...Ts>
+constexpr T product(Ts&&...list)
 {
   /// Result
   T out=1;
   
-  for(auto i : list)
+  const T l[]{list...};
+  
+  for(auto i : l)
     out*=i;
   
   return out;
 }
 
+/// Compute the product of the passed list of T values
+template <typename F,
+	  typename T=int64_t>
+constexpr T combine(F&& f,
+		    const T& init,
+		    const std::initializer_list<T>& list)
+{
+  /// Result
+  T out=init;
+  
+  for(auto i : list)
+    out=f(out,i);
+  
+  return out;
+}
+
+// template <typename F,
+// 	  typename...T>
+// constexpr auto product(T&&...t)
+// {
+//   return combine(std::multiplies<>(),1,std::forward<T>(t)...);
+// }
+
 /// Dynamic size
-constexpr int64_t DYNAMIC=-1;
+enum{DYNAMIC=-1};
 
 /// Base type for a space index
 struct _Space
 {
   /// Value beyond end
-  static constexpr int64_t sizeAtCompileTime=DYNAMIC;
+  enum{sizeAtCompileTime=DYNAMIC};
 };
 
 /// Base type for a color index
 struct _Color
 {
   /// Value beyond end
-  static constexpr int64_t sizeAtCompileTime=3;
+  enum{sizeAtCompileTime=3};
 };
 
 /// Base type for a spin index
 struct _Spin
 {
   /// Value beyond end
-  static constexpr int64_t sizeAtCompileTime=4;
+  enum{sizeAtCompileTime=4};
 };
 
 /// Row or column
@@ -320,14 +346,15 @@ class Tens<TensComps<TC...>,Fund>
 public:
   
   /// Initialize the tensor with the knowledge of the dynamic size
-  template <typename...TD>
+  template <typename...TD,
+	    std::enable_if_t<product<int64_t>(not TD::SizeKnownAtCompileTime...),void*> =nullptr>
   Tens(TD&&...td)
   {
     /// Dynamic size
-    const int64_t dynamicSize=product({initSize<TD>(std::forward<TD>(td))...});
+    const int64_t dynamicSize=product<int64_t>(initSize<TD>(std::forward<TD>(td))...);
     
     /// Static size
-    const int64_t staticSize=labs(product({TC::Base::sizeAtCompileTime...}));
+    const int64_t staticSize=labs(product<int64_t>(TC::Base::sizeAtCompileTime...));
     
     size=dynamicSize*staticSize;
     //cout<<"Total size: "<<size<<endl;
