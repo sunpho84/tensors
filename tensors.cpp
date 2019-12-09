@@ -17,15 +17,19 @@ constexpr const T& as_const(T& t) noexcept
 
 #endif
 
-/// Remove \c const qualifier from anything
-///
-/// \todo  Check that  the  "dangling  reference forbidding"  below,
-/// currently not working, is not actually necessary
+/// Returns true if T is a const lvalue reference
 template <typename T>
-constexpr T& as_mutable(const T& v) noexcept
+constexpr bool is_const_lvalue_reference_v=std::is_lvalue_reference<T>::value and std::is_const<std::remove_reference_t<T>>::value;
+
+/// Returns the type without "const" attribute if it is a reference
+template <typename T>
+decltype(auto) remove_const_if_ref(T&& t)
 {
-  return const_cast<T&>(v);
+  return (std::conditional_t<is_const_lvalue_reference_v<T>,T&,T>)t;
 }
+
+template <typename T>
+using ref_or_val_t=std::conditional_t<std::is_lvalue_reference<T>::value,T&,T>;
 
 /// Provides also a non-const version of the method \c NAME
 ///
@@ -53,7 +57,7 @@ constexpr T& as_mutable(const T& v) noexcept
   template <typename...Ts> /* Type of all arguments                  */	\
   decltype(auto) NAME(Ts&&...ts) /*!< Arguments                      */ \
   {									\
-    return as_mutable(as_const(*this).NAME(std::forward<Ts>(ts)...)); \
+    return remove_const_if_ref(as_const(*this).NAME(std::forward<Ts>(ts)...)); \
   }
 
 template <typename T>
@@ -83,11 +87,14 @@ constexpr T product(const std::initializer_list<T>& list)
   return out;
 }
 
+/// Dynamic size
+constexpr int64_t DYNAMIC=-1;
+
 /// Base type for a space index
 struct _Space
 {
   /// Value beyond end
-  static constexpr int64_t sizeAtCompileTime=-1;
+  static constexpr int64_t sizeAtCompileTime=DYNAMIC;
 };
 
 /// Base type for a color index
@@ -104,6 +111,7 @@ struct _Spin
   static constexpr int64_t sizeAtCompileTime=4;
 };
 
+/// Row or column
 enum RowCol{ROW,COL};
 
 /// Tensor component defined by base type S
@@ -114,10 +122,14 @@ template <typename S,
 	  int Which=0>
 struct TensorCompIdx
 {
+  /// Base type
   typedef S Base;
   
   /// Value
   int64_t i;
+  
+  /// Check if the size is known at compile time
+  static constexpr bool SizeKnownAtCompileTime=Base::sizeAtCompileTime!=DYNAMIC;
   
   /// Init from int
   explicit TensorCompIdx(int64_t i) : i(i)
@@ -141,11 +153,16 @@ struct TensorCompIdx
     return i;
   }
   
+  /// Transposed index
   auto transp() const
   {
     return TensorCompIdx<S,(RC==ROW)?COL:ROW,Which>{i};
   }
 };
+
+/// Collection of components
+template <typename...Tc>
+using TensComps=std::tuple<Tc...>;
 
 /// Space index
 template <RowCol RC=ROW,
@@ -162,17 +179,18 @@ template <RowCol RC=ROW,
 	  int Which=0>
 using ColorIdx=TensorCompIdx<_Color,RC,Which>;
 
-template <typename T>
-using RefOrVal=std::conditional_t<std::is_lvalue_reference<T>::value,T&,T>;
-
-template <typename T,
-	  typename...C>
-struct Bind
+/// Binder a component or more than one
+template <typename T,    // Type of the reference to bind
+	  typename...C>  // Type of the components to bind
+struct Binder
 {
-  RefOrVal<T> ref;
+  /// Reference to bind
+  ref_or_val_t<T> ref;
   
-  std::tuple<RefOrVal<C>...> vals;
+  /// Components to bind
+  TensComps<ref_or_val_t<C>...> vals;
   
+  /// Access to the reference passing all bound components, and more
   template <typename...Tail>
   decltype(auto) operator()(Tail&&...tail) const
   {
@@ -181,52 +199,62 @@ struct Bind
   
   PROVIDE_ALSO_NON_CONST_METHOD(operator());
   
-  
-  template <typename F,
-	    typename...Tail>
-  decltype(auto) call(F&& f,
-		      Tail&&...tail)
+  /// Call a function using the reference, the bound components, and all passed ones
+  template <typename F,       // Type of the function
+	    typename...Tail>  // Type of the other components
+  decltype(auto) call(F&& f,                    ///< Function to call
+		      Tail&&...tail) const      ///< Other components to pass
   {
     return f(ref,std::get<C>(vals)...,std::forward<Tail>(tail)...);
   }
   
-  template <typename S>
-  decltype(auto) operator[](S&& s) const
+  /// Single component access via subscribe operator
+  template <typename S>                      // Type of the subscribed component
+  decltype(auto) operator[](S&& s) const     ///< Subscribed component
   {
     return (*this)(std::forward<S>(s));
   }
   
   PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
   
-  Bind(T&& ref,
-       C&&...vals)
+  /// Construct the binder from a reference and components
+  Binder(T&& ref,     ///< Reference
+	 C&&...vals)  ///< Components
     : ref(ref),vals{vals...}
   {
   }
 };
 
-template <typename T>
-auto bind(T&& ref)
+// template <typename T>
+// auto bind(T&& ref)
+// {
+//   return ref;
+// }
+
+/// Creates a binder, using the passed reference and component
+template <typename T,    // Reference type
+	  typename...Tp> // Components type
+auto bind(T&& ref,       ///< Reference
+	  Tp&&...comps)  ///< Components
 {
-  return ref;
+  return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
 }
 
-template <typename T,
-	  typename...Tp>
-auto bind(T&& ref,
-	  Tp&&...comps)
-{
-  return Bind<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
-}
+/// Tensor with Comps components, of Fund funamental type
+template <typename Comps,
+	  typename Fund>
+class Tens;
 
 /// Tensor
-template <typename...TC>
-class Tens
+template <typename Fund,
+	  typename...TC>
+class Tens<TensComps<TC...>,Fund>
 {
-  std::tuple<TC...> sizes;
+  /// Sizes of the components
+  TensComps<TC...> sizes;
   
   /// Calculate the index - no more components to parse
-  int64_t index(int64_t outer) ///< Value of all the outer components
+  int64_t index(int64_t outer) const ///< Value of all the outer components
   {
     return outer;
   }
@@ -246,6 +274,7 @@ class Tens
   int64_t index(int64_t outer,      ///< Value of all the outer components
 		T&& thisComp,       ///< Currently parsed component
 		Tp&&...innerComps)  ///< Inner components
+    const
   {
     constexpr int64_t i=std::remove_reference_t<T>::Base::sizeAtCompileTime;
     
@@ -261,7 +290,7 @@ class Tens
   
   /// Intermediate layer to reorder the passed components
   template <typename...Cp>
-  int64_t reorderedIndex(Cp&&...comps)
+  int64_t reorderedIndex(Cp&&...comps) const
   {
     /// Put the arguments in atuple
     auto argsInATuple=std::make_tuple(std::forward<Cp>(comps)...);
@@ -274,34 +303,42 @@ class Tens
   int64_t size;
   
   /// Storage
-  std::unique_ptr<double[]> data;
+  std::unique_ptr<Fund[]> data;
   
+  /// Compute the size needed to initialize the tensor
   template <typename T>
   int64_t initSize(int64_t s)
   {
-    constexpr int64_t i=T::Base::sizeAtCompileTime;
-    (int64_t&)(std::get<T>(sizes))=(i>0)?i:s;
+    /// Compile-time size
+    constexpr int64_t cs=T::Base::sizeAtCompileTime;
+    
+    (int64_t&)(std::get<T>(sizes))=(cs>0)?cs:s;
+    
     return std::get<T>(sizes);
   }
   
 public:
   
-  //
+  /// Initialize the tensor with the knowledge of the dynamic size
   template <typename...TD>
   Tens(TD&&...td)
   {
+    /// Dynamic size
     const int64_t dynamicSize=product({initSize<TD>(std::forward<TD>(td))...});
+    
+    /// Static size
     const int64_t staticSize=labs(product({TC::Base::sizeAtCompileTime...}));
+    
     size=dynamicSize*staticSize;
     //cout<<"Total size: "<<size<<endl;
     
-    data=std::unique_ptr<double[]>(new double[size]);
+    data=std::unique_ptr<Fund[]>(new Fund[size]);
   }
   
   /// Access to inner data with any order
   template <typename...Cp,
 	    std::enable_if_t<sizeof...(Cp)!=sizeof...(TC),void*> =nullptr>
-  auto operator()(Cp&&...comps)
+  auto operator()(Cp&&...comps) const ///< Components
   {
     return bind(*this,comps...);
   }
@@ -309,7 +346,7 @@ public:
   /// Access to inner data with any order
   template <typename...Cp,
 	    std::enable_if_t<sizeof...(Cp)==sizeof...(TC),void*> =nullptr>
-  double& operator()(Cp&&...comps)
+  Fund& operator()(Cp&&...comps) const ///< Components
   {
     const int64_t i=reorderedIndex(std::forward<Cp>(comps)...);
     
@@ -317,28 +354,43 @@ public:
     return data[i];
   }
   
-  template <typename T>
-  decltype(auto) operator[](T&& t)
+  PROVIDE_ALSO_NON_CONST_METHOD(operator());
+  
+  /// Single component access via subscribe operator
+  template <typename T>                   // Subscribed component type
+  decltype(auto) operator[](T&& t) const  ///< Subscribed component
   {
     return (*this)(std::forward<T>(t));
   }
   
-  /// Gives trivial access
-  double& trivialAccess(int64_t iSpin,int64_t iSpace,int64_t iCol,int64_t vol)
+  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
+  
+  /// Provide trivial access to the fundamental data
+  Fund& trivialAccess(const int64_t& i) const
   {
-    return data[iCol+3*(iSpace+vol*iSpin)];
+    return data[i];
   }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(trivialAccess);
 };
 
+/////////////////////////////////////////////////////////////////
+
+using SpinSpaceColor=TensComps<SpinIdx<ROW>,SpaceIdx<ROW>,ColorIdx<ROW>>;
+
+template <typename Fund>
+using SpinColorField=Tens<SpinSpaceColor,Fund>;
+
+using SpinColorFieldD=SpinColorField<double>;
+
 #define TEST(NAME,...)							\
-  double& NAME(Tens<SpinIdx<ROW>,SpaceIdx<ROW>,ColorIdx<ROW>>& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx<ROW> space) \
+  double& NAME(SpinColorFieldD& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx<ROW> space) \
   {									\
     asm("#here " #NAME "  access");					\
     return __VA_ARGS__;							\
   }
 
 int64_t vol;
-
 
 TEST(seq_fun,bind(bind(tensor,col),spin)(space))
 
@@ -350,7 +402,7 @@ TEST(svc_fun,tensor(spin,space,col));
 
 TEST(hyp_fun,tensor(col)(spin)(space));
 
-TEST(triv_fun,tensor.trivialAccess(spin,space,col,vol));
+TEST(triv_fun,tensor.trivialAccess(col+3*(space+vol*spin)));
 
 int main()
 {
@@ -361,8 +413,8 @@ int main()
   cout<<"Please enter volume: ";
   cin>>vol;
   
-  /// Spindolor
-  Tens<SpinIdx<ROW>,SpaceIdx<ROW>,ColorIdx<ROW>> tensor(SpaceIdx<ROW>{vol});
+  /// Spinspacecolor
+  Tens<SpinSpaceColor,double> tensor(SpaceIdx<ROW>{vol});
   
   /// Fill the spincolor with flattened index
   for(SpinIdx<ROW> s(0);s<4;s++)
@@ -402,7 +454,9 @@ int main()
   /// Trivial spin access
   double& t=triv_fun(tensor,spin,col,space);
   
-  using SU3=Tens<ColorIdx<ROW>,ColorIdx<COL>>;
+  using SU3Comps=TensComps<ColorIdx<ROW>,ColorIdx<COL>>;
+  
+  using SU3=Tens<SU3Comps,double>;
   
   SU3 link1,link2,link3;
   
