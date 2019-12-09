@@ -25,7 +25,9 @@ constexpr bool is_const_lvalue_reference_v=std::is_lvalue_reference<T>::value an
 template <typename T>
 decltype(auto) remove_const_if_ref(T&& t)
 {
-  return (std::conditional_t<is_const_lvalue_reference_v<T>,T&,T>)t;
+  using Tv=std::remove_const_t<std::remove_reference_t<T>>;
+  
+  return (std::conditional_t<is_const_lvalue_reference_v<T>,Tv&,Tv>)t;
 }
 
 template <typename T>
@@ -208,6 +210,11 @@ struct _Spin : public TensCompSize<4>
 {
 };
 
+/// Base type for a complex index
+struct _Compl : public TensCompSize<2>
+{
+};
+
 /// Row or column
 enum RowCol{ROW,COL};
 
@@ -289,6 +296,11 @@ template <RowCol RC=ROW,
 	  int Which=0>
 using ColorIdx=TensorCompIdx<_Color,RC,Which>;
 
+/// Complex index
+template <RowCol RC=ROW,
+	  int Which=0>
+using ComplIdx=TensorCompIdx<_Compl,RC,Which>;
+
 /// Binder a component or more than one
 template <typename T,    // Type of the reference to bind
 	  typename...C>  // Type of the components to bind
@@ -344,10 +356,10 @@ struct Binder
 /// Creates a binder, using the passed reference and component
 template <typename T,    // Reference type
 	  typename...Tp> // Components type
-auto bind(T&& ref,       ///< Reference
+auto bind(const T& ref,       ///< Reference
 	  Tp&&...comps)  ///< Components
 {
-  return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
+  return Binder<const T&,Tp...>(ref,std::forward<Tp>(comps)...);
 }
 
 template <typename Fund,
@@ -386,8 +398,8 @@ struct TensStorage
   }
   
   /// Single component access via subscribe operator
-  template <typename T>                   // Subscribed component type
-  auto& operator[](const T& t) const  ///< Subscribed component
+  template <typename T>                       // Subscribed component type
+  const auto& operator[](const T& t) const  ///< Subscribed component
   {
     return data.data[t];
   }
@@ -530,7 +542,7 @@ public:
 	    std::enable_if_t<sizeof...(Cp)!=sizeof...(TC),void*> =nullptr>
   decltype(auto) operator()(Cp&&...comps) const ///< Components
   {
-    return bind(*this,comps...);
+    return bind(*this,std::forward<Cp>(comps)...);
   }
   
   /// Access to inner data with any order
@@ -556,7 +568,7 @@ public:
   PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
   
   /// Provide trivial access to the fundamental data
-  Fund& trivialAccess(const Size& i) const
+  const Fund& trivialAccess(const Size& i) const
   {
     return data[i];
   }
@@ -594,6 +606,13 @@ TEST(hyp_fun,tensor(col)(spin)(space));
 
 TEST(triv_fun,tensor.trivialAccess(col+3*(space+vol*spin)));
 
+template <typename T>
+void test_if_ref(T&& t)
+{
+  const bool b=is_const_lvalue_reference_v<T>;
+  std::cout<<"ECCO "<<b<<std::endl;
+}
+
 int main()
 {
   using std::cout;
@@ -610,7 +629,7 @@ int main()
   for(SpinIdx<ROW> s(0);s<4;s++)
     for(SpaceIdx<ROW> v(0);v<vol;v++)
       for(ColorIdx<ROW> c(0);c<3;c++)
-	tensor(s,v,c)=c+3*(v+vol*s);
+  	tensor(s,v,c)=c+3*(v+vol*s);
   
   // Read components to access
   cout<<"Please enter spin, space and color index to printout: ";
@@ -650,15 +669,29 @@ int main()
   
   SU3 link1,link2,link3;
   
-  // for(ColorIdx<ROW> i1{0};i1<3;i1++)
-  //   for(ColorIdx<COL> k2{0};k2<3;k2++)
-  //     {
-  // 	link3(i1,k2)=0.0;
-  // 	for(ColorIdx<COL> i2(0);i2<3;i2++)
-  // 	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
-  //     }
+  using ComplComps=TensComps<ComplIdx<ROW>>;
   
-  cout<<"Test: "<<svc<<" "<<csv<<" "<<t<<" "<<seq<<" "<<hyp<<" "<<bra<<" expected: "<<col+3*(space+vol*spin)<<endl;
+  //const double a=0.0;
+  //remove_const_if_ref(a)=0.0;
+  Tens<ComplComps,double> test;
+  test.trivialAccess(0)=0.0;
+  
+  for(ColorIdx<ROW> i1{0};i1<3;i1++)
+    for(ColorIdx<COL> k2{0};k2<3;k2++)
+      {
+  	link3(i1,k2)=0.0;
+  	for(ColorIdx<COL> i2(0);i2<3;i2++)
+  	  link3(i1,k2)+=link1(i1,i2)*link2(i2.transp(),k2);
+      }
+  
+  cout<<"Test:";
+  cout<<" "<<svc;
+  cout<<" "<<csv;
+  cout<<" "<<t;
+  cout<<" "<<seq;
+  cout<<" "<<hyp;
+  cout<<" "<<bra;
+  cout<<" expected: "<<col+3*(space+vol*spin)<<endl;
   
   cout<<SpinColorFieldD::stackAllocated<<endl;
   cout<<SU3::stackAllocated<<endl;
