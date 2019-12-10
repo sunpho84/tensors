@@ -152,7 +152,7 @@ struct Crtp
 //   return out;
 // }
 
-/// Compute the product of the passed list of T values
+/// Combine the the passed list of values
 template <typename F,
 	  typename T,
 	  typename...Ts>
@@ -162,7 +162,7 @@ constexpr T combine(F&& f,
 {
   /// Result
   T out=init;
-
+  
   const T l[]{list...};
   
   for(auto i : l)
@@ -257,24 +257,13 @@ struct TensorCompIdx
     return i;
   }
   
-  static constexpr RowCol _transp(const RowCol& rc)
-  {
-    switch(rc)
-      {
-      case ROW:
-	return COL;
-	break;
-      case COL:
-	return ROW;
-      default:
-	return ANY;
-      }
-  }
-  
   /// Transposed index
   auto transp() const
   {
-    return TensorCompIdx<S,_transp(RC),Which>{i};
+    /// Transposed type of component
+    constexpr RowCol TRANSP=(RC==ANY)?ANY:((RC==COL)?ROW:COL);
+    
+    return TensorCompIdx<S,TRANSP,Which>{i};
   }
 };
 
@@ -296,9 +285,7 @@ template <typename...Tc>
 using TensComps=std::tuple<Tc...>;
 
 /// Space index
-template <RowCol RC=ROW,
-	  int Which=0>
-using SpaceIdx=TensorCompIdx<_Space,RC,Which>;
+using SpaceIdx=TensorCompIdx<_Space,ANY,0>;
 
 /// Spin index
 template <RowCol RC=ROW,
@@ -311,9 +298,7 @@ template <RowCol RC=ROW,
 using ColorIdx=TensorCompIdx<_Color,RC,Which>;
 
 /// Complex index
-template <RowCol RC=ANY,
-	  int Which=0>
-using ComplIdx=TensorCompIdx<_Compl,RC,Which>;
+using ComplIdx=TensorCompIdx<_Compl,ANY,0>;
 
 /// Binder a component or more than one
 template <typename T,    // Type of the reference to bind
@@ -592,7 +577,7 @@ public:
 
 /////////////////////////////////////////////////////////////////
 
-using SpinSpaceColor=TensComps<SpinIdx<ROW>,SpaceIdx<ANY>,ColorIdx<ROW>>;
+using SpinSpaceColor=TensComps<SpinIdx<ROW>,SpaceIdx,ColorIdx<ROW>>;
 
 template <typename Fund>
 using SpinColorField=Tens<SpinSpaceColor,Fund>;
@@ -600,13 +585,13 @@ using SpinColorField=Tens<SpinSpaceColor,Fund>;
 using SpinColorFieldD=SpinColorField<double>;
 
 #define TEST(NAME,...)							\
-  double& NAME(SpinColorFieldD& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx<ANY> space) \
+  double& NAME(SpinColorFieldD& tensor,SpinIdx<ROW> spin,ColorIdx<ROW> col,SpaceIdx space) \
   {									\
     asm("#here " #NAME "  access");					\
     return __VA_ARGS__;							\
   }
 
-SpaceIdx<ANY> vol;
+SpaceIdx vol;
 
 TEST(seq_fun,bind(bind(tensor,col),spin)(space))
 
@@ -632,7 +617,7 @@ template <typename TOut,
 	  typename TIn2>
 void unsafe_su3_prod(TOut&& out,const TIn1& in1,const TIn2& in2)
 {
-  SpaceIdx<ANY> s(0);
+  SpaceIdx s(0);
   
   for(ColorIdx<ROW> i1{0};i1<3;i1++)
     for(ColorIdx<COL> k2{0};k2<3;k2++)
@@ -657,7 +642,7 @@ int main()
   
   /// Fill the spincolor with flattened index
   for(SpinIdx<ROW> s(0);s<4;s++)
-    for(SpaceIdx<ANY> v(0);v<vol;v++)
+    for(SpaceIdx v(0);v<vol;v++)
       for(ColorIdx<ROW> c(0);c<3;c++)
   	tensor(s,v,c)=c+3*(v+vol*s);
   
@@ -669,7 +654,7 @@ int main()
   cin>>spin;
   
   /// Space component
-  SpaceIdx<ANY> space;
+  SpaceIdx space;
   cin>>space;
   
   /// Color component
@@ -693,20 +678,20 @@ int main()
   /// Trivial spin access
   double& t=triv_fun(tensor,spin,col,space);
   
-  using SU3FieldComps=TensComps<ColorIdx<ROW>,ColorIdx<COL>,SpaceIdx<ANY>>;
+  using SU3FieldComps=TensComps<ColorIdx<ROW>,ColorIdx<COL>,SpaceIdx>;
   
   using SU3Field=Tens<SU3FieldComps,double>;
   
   SU3Field conf1(vol),conf2(vol),conf3(vol);
   
-  using ComplComps=TensComps<ComplIdx<ROW>>;
+  using ComplComps=TensComps<ComplIdx>;
   
   //const double a=0.0;
   //remove_const_if_ref(a)=0.0;
   Tens<ComplComps,double> test;
   test.trivialAccess(0)=0.0;
   
-    for(SpaceIdx<ANY> v(0);v<vol;v++)
+    for(SpaceIdx v(0);v<vol;v++)
       for(ColorIdx<ROW> c1(0);c1<3;c1++)
 	for(ColorIdx<COL> c2(0);c2<3;c2++)
 	  conf1(space,c1,c2)=conf2(space,c1,c2)=conf3(space,c1,c2)=0.0;
