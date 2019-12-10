@@ -361,38 +361,51 @@ auto bind(const T& ref,       ///< Reference
   return Binder<const T&,Tp...>(ref,std::forward<Tp>(comps)...);
 }
 
-template <typename Fund,
-	  Size StaticSize,
-	  bool AllStatic>
+/// Class to store the data
+template <typename Fund,   // Fundamental type
+	  Size StaticSize, // Non-dynamic size
+	  bool AllStatic>  // Store whether all components have static size
 struct TensStorage
 {
+  /// Structure to hold dynamically allocated data
   struct DynamicStorage
   {
     /// Storage
     std::unique_ptr<Fund[]> data;
     
+    /// Default constructor: allocate data
     DynamicStorage(const Size& dynSize) : data(new Fund[StaticSize*dynSize])
     {
     }
   };
   
+  /// Structure to hold statically allocated data
   struct StackStorage
   {
     /// Storage
     Fund data[StaticSize];
     
+    /// Default constructor: since the data is statically allocated, we need to do nothing
     StackStorage(const Size&)
     {
     }
   };
   
+  /// Threshold beyond which allocate dynamically in any case
   static constexpr Size MAX_STACK_SIZE=2304;
   
+  /// Decide whether to allocate on the stack or dynamically
   static constexpr bool stackAllocated=AllStatic and StaticSize*sizeof(Fund)<=MAX_STACK_SIZE;
   
-  std::conditional_t<stackAllocated,StackStorage,DynamicStorage> data;
+  /// Actual storage class
+  using ActualStorage=std::conditional_t<stackAllocated,StackStorage,DynamicStorage>;
   
-  TensStorage(const Size& size) : data(size)
+  /// Storage of data
+  ActualStorage data;
+  
+  /// Construct taking the size to allocate
+  TensStorage(const Size& size) ///< Size to allocate
+    : data(size)
   {
   }
   
@@ -519,6 +532,7 @@ class Tens<TensComps<TC...>,Fund>
   
 public:
   
+  /// Report whether the data is allocated on the stack or dynamically
   static constexpr bool stackAllocated=decltype(data)::stackAllocated;
   
   /// Initialize the tensor with the knowledge of the dynamic size
@@ -549,6 +563,7 @@ public:
 	    std::enable_if_t<sizeof...(Cp)==sizeof...(TC),void*> =nullptr>
   decltype(auto) operator()(Cp&&...comps) const ///< Components
   {
+    /// Compute the index
     const Size i=reorderedIndex(std::forward<Cp>(comps)...);
     
     //cout<<"Index: "<<i<<endl;
