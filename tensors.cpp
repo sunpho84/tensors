@@ -361,6 +361,49 @@ auto bind(const T& ref,       ///< Reference
   return Binder<const T&,Tp...>(ref,std::forward<Tp>(comps)...);
 }
 
+/////////////////////////////////////////////////////////////////
+
+/// Transpose the reference
+template <typename T>    // Type of the reference to transpose
+struct Transposer
+{
+  /// Reference to bind
+  ref_or_val_t<T> ref;
+  
+  /// Access to the reference transposeing all passed values
+  template <typename...Cp>
+  decltype(auto) operator()(Cp&&...c) const
+  {
+    return ref(c.transp()...);
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator());
+  
+  /// Single component access via subscribe operator
+  template <typename S>                      // Type of the subscribed component
+  decltype(auto) operator[](S&& s) const     ///< Subscribed component
+  {
+    return (*this)(std::forward<S>(s));
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
+  
+  /// Construct the transposer a reference
+  Transposer(T&& ref)     ///< Reference
+    : ref(ref)
+  {
+  }
+};
+
+/// Creates a transposer, using the passed reference
+template <typename T>               // Reference type
+auto transpose(const T& ref)      ///< Reference
+{
+  return Transposer<const T&>(ref);
+}
+
+/////////////////////////////////////////////////////////////////
+
 /// Class to store the data
 template <typename Fund,   // Fundamental type
 	  Size StaticSize, // Non-dynamic size
@@ -371,11 +414,21 @@ struct TensStorage
   struct DynamicStorage
   {
     /// Storage
-    std::unique_ptr<Fund[]> data;
+    Fund* data;
     
-    /// Default constructor: allocate data
-    DynamicStorage(const Size& dynSize) : data(new Fund[StaticSize*dynSize])
+    /// Construct allocating data
+    DynamicStorage(const Size& dynSize)
     {
+      /// Total size to allocate
+      const Size totalSize=StaticSize*dynSize;
+      
+      data=new Fund[totalSize];
+    }
+    
+    /// Destructor deallocating the memory
+    ~DynamicStorage()
+    {
+      delete[] data;
     }
   };
   
@@ -385,7 +438,7 @@ struct TensStorage
     /// Storage
     Fund data[StaticSize];
     
-    /// Default constructor: since the data is statically allocated, we need to do nothing
+    /// Constructor: since the data is statically allocated, we need to do nothing
     StackStorage(const Size&)
     {
     }
@@ -417,7 +470,6 @@ struct TensStorage
   }
   
   PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
-  
 };
 
 /// Tensor with Comps components, of Fund funamental type
@@ -430,8 +482,10 @@ template <typename Fund,
 	  typename...TC>
 class Tens<TensComps<TC...>,Fund>
 {
+  /// List of all statically allocated components
   using StaticComps=TupleFilter<SizeIsKnownAtCompileTime<true>::t,TensComps<TC...>>;
   
+  /// List of all dynamically allocated components
   using DynamicComps=TupleFilter<SizeIsKnownAtCompileTime<false>::t,TensComps<TC...>>;
   
   /// Sizes of the dynamic components
@@ -446,6 +500,9 @@ class Tens<TensComps<TC...>,Fund>
     return outer;
   }
   
+  /// Size of the Tv component
+  ///
+  /// Case in which the component size is knwon at compile time
   template <typename Tv,
 	    std::enable_if_t<Tv::SizeIsKnownAtCompileTime,void*> =nullptr>
   constexpr Size compSize() const
@@ -453,6 +510,9 @@ class Tens<TensComps<TC...>,Fund>
     return Tv::Base::sizeAtCompileTime();
   }
   
+  /// Size of the Tv component
+  ///
+  /// Case in which the component size is not knwon at compile time
   template <typename Tv,
 	    std::enable_if_t<not Tv::SizeIsKnownAtCompileTime,void*> =nullptr>
   const Size& compSize() const
@@ -509,10 +569,11 @@ class Tens<TensComps<TC...>,Fund>
   /// Storage
   TensStorage<Fund,staticSize,allCompsAreStatic> data;
   
-  template <typename Ds,
-	    typename Out>
-  Size initializeDynSize(const Ds& inputs,
-			 Out& out)
+  /// Initialize the dynamical component \t Out using the inputs
+  template <typename Ds,   // Type of the dynamically allocated components
+	    typename Out>  // Type to set
+  Size initializeDynSize(const Ds& inputs, ///< Input sizes
+			 Out& out)         ///< Output size to set
   {
     out=std::get<Out>(inputs);
     
@@ -588,9 +649,23 @@ public:
   }
   
   PROVIDE_ALSO_NON_CONST_METHOD(trivialAccess);
+  
+  /// Gets access to the inner data
+  const Fund* getRawAccess() const
+  {
+    return &trivialAccess(0);
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(getRawAccess);
 };
 
 /////////////////////////////////////////////////////////////////
+
+template <typename...Tp>
+struct Field
+{
+  
+};
 
 using SpinSpaceColor=TensComps<SpinIdx<ROW>,SpaceIdx,ColorIdx<ROW>>;
 
@@ -700,10 +775,20 @@ int main()
   SU3Field conf1(vol),conf2(vol),conf3(vol);
   
   using ComplComps=TensComps<ComplIdx>;
-  
+  // Binder<const Tens<std::tuple<TensorCompIdx<_Color, ROW, 0>,
+  // 			       TensorCompIdx<_Color, COL, 0>,
+  // 			       TensorCompIdx<_Space, ANY, 0> >,
+  // 		    double>&,
+  // 	 const Tens<std::tuple<TensorCompIdx<_Color, ROW, 0>,
+  // 			       TensorCompIdx<_Color, COL, 0>,
+  // 			       TensorCompIdx<_Space, ANY, 0> >,
+  // 		    double>&,
+  // 	 TensorCompIdx<_Color, COL, 0>,
+  // 	 TensorCompIdx<_Color, ROW, 0>,
+  // 	 TensorCompIdx<_Space, ANY, 0> >
   //const double a=0.0;
   //remove_const_if_ref(a)=0.0;
-  Tens<ComplComps,double> test;
+    Tens<ComplComps,double> test;
   test.trivialAccess(0)=0.0;
   
     for(SpaceIdx v(0);v<vol;v++)
@@ -712,6 +797,9 @@ int main()
 	  conf1(space,c1,c2)=conf2(space,c1,c2)=conf3(space,c1,c2)=0.0;
   
   unsafe_su3_prod(conf1,conf2,conf3);
+  
+  conf1(ColorIdx<COL>{0},ColorIdx<ROW>{1},SpaceIdx{0})=1.0;
+  cout<<"Transp: "<<transpose(conf1(SpaceIdx{0})(ColorIdx<ROW>{1}))(ColorIdx<ROW>{0})<<endl;
   
   cout<<"Test:";
   cout<<" "<<conf1[space][col][col.transp()];
