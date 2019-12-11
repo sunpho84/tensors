@@ -75,16 +75,39 @@ struct Crtp
 };
 
 template <typename T>
+struct CompsTraits;
+
+template <typename T>
 struct Subscribable : public Crtp<T>
 {
+  static constexpr int NComps=std::tuple_size<typename CompsTraits<T>::Comps>::value;
+  
   /// Single component access via subscribe operator
   template <typename S>                      // Type of the subscribed component
   decltype(auto) operator[](S&& s) const     ///< Subscribed component
   {
-    return this->crtp()(std::forward<S>(s));
+    return (*this)(std::forward<S>(s));
   }
   
   PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
+  
+  /// Access to inner data with any order
+  template <typename...Cp,
+	    std::enable_if_t<sizeof...(Cp)!=NComps,void*> =nullptr>
+  decltype(auto) operator()(Cp&&...comps) const ///< Components
+  {
+    return bind(this->crtp(),std::forward<Cp>(comps)...);
+  }
+  
+  /// Access to inner data with any order
+  template <typename...Cp,
+	    std::enable_if_t<sizeof...(Cp)==NComps,void*> =nullptr>
+  decltype(auto) operator()(Cp&&...comps) const ///< Components
+  {
+    return this->crtp().eval(std::forward<Cp>(comps)...);
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator());
 };
 
 /// Filter a tuple on the basis of a predicate on the type
@@ -246,6 +269,11 @@ template <typename S,
 	  int Which=0>
 struct TensorCompIdx
 {
+  /// Transposed type of component
+  static constexpr RowCol TRANSP=(RC==ANY)?ANY:((RC==COL)?ROW:COL);
+  
+  using Transp=TensorCompIdx<S,TRANSP,Which>;
+  
   /// Base type
   typedef S Base;
   
@@ -280,10 +308,7 @@ struct TensorCompIdx
   /// Transposed index
   auto transp() const
   {
-    /// Transposed type of component
-    constexpr RowCol TRANSP=(RC==ANY)?ANY:((RC==COL)?ROW:COL);
-    
-    return TensorCompIdx<S,TRANSP,Which>{i};
+    return Transp{i};
   }
 };
 
@@ -304,7 +329,7 @@ template <int N,
 	  typename Tp>
 struct TypeIsInList;
 
-/// Predicate returning whether the size is known ow not at compile time
+/// Predicate returning whether the type is present in the list
 template <int N,
 	  typename...Tp>
 struct TypeIsInList<N,std::tuple<Tp...>>
@@ -368,9 +393,7 @@ struct Binder : public Subscribable<Binder<T,C...>>
 {
   using BoundComps=std::tuple<std::remove_reference_t<C>...>;
   
-  using RefComps=typename std::remove_reference_t<T>::Comps;
-  
-  using Comps=TupleFilterOut<BoundComps,RefComps>;
+  using RefComps=typename CompsTraits<typename std::remove_cv_t<std::remove_reference_t<T>>>::Comps;
   
   /// Reference to bind
   ref_or_val_t<T> ref;
@@ -380,12 +403,10 @@ struct Binder : public Subscribable<Binder<T,C...>>
   
   /// Access to the reference passing all bound components, and more
   template <typename...Tail>
-  decltype(auto) operator()(Tail&&...tail) const
+  decltype(auto) eval(Tail&&...tail) const
   {
     return ref(std::get<C>(vals)...,std::forward<Tail>(tail)...);
   }
-  
-  PROVIDE_ALSO_NON_CONST_METHOD(operator());
   
   /// Call a function using the reference, the bound components, and all passed ones
   template <typename F,       // Type of the function
@@ -418,16 +439,30 @@ auto bind(T&& ref,       ///< Reference
 {
   return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
 }
-
 /// Creates a binder, using the passed reference and component
 template <typename T,    // Reference type
 	  typename...Tp> // Components type
 auto bind2(T&& ref,       ///< Reference
 	  Tp&&...comps)  ///< Components
 {
-  // int& r=ref;
   return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
 }
+
+template <typename T,
+	  typename...C>
+struct CompsTraits<Binder<T,C...>>
+{
+  using Type=Binder<T,C...>;
+  
+  using Ref=T;
+  
+  using BoundComps=std::tuple<std::remove_reference_t<C>...>;
+  
+  using RefComps=typename CompsTraits<typename std::remove_cv_t<std::remove_reference_t<T>>>::Comps;
+  
+  using Comps=TupleFilterOut<BoundComps,RefComps>;
+};
+
 /////////////////////////////////////////////////////////////////
 
 /// Transpose the reference
@@ -439,12 +474,12 @@ struct Transposer : public Subscribable<Transposer<T>>
   
   /// Access to the reference transposeing all passed values
   template <typename...Cp>
-  decltype(auto) operator()(Cp&&...c) const
+  decltype(auto) eval(Cp&&...c) const
   {
     return ref(c.transp()...);
   }
   
-  PROVIDE_ALSO_NON_CONST_METHOD(operator());
+  PROVIDE_ALSO_NON_CONST_METHOD(eval);
   
   /// Construct the transposer a reference
   Transposer(T&& ref)     ///< Reference
@@ -454,11 +489,34 @@ struct Transposer : public Subscribable<Transposer<T>>
 };
 
 /// Creates a transposer, using the passed reference
-template <typename T>               // Reference type
+template <typename T>                  // Reference type
 Transposer<T> transpose(T&& ref)      ///< Reference
 {
   return std::forward<T>(ref);
 }
+
+template <typename T>
+struct _TransposedComps;
+
+template <typename...T>
+struct _TransposedComps<std::tuple<T...>>
+{
+  using Comps=std::tuple<T...>;
+  
+  using type=std::tuple<std::conditional_t<TypeIsInList<1,Comps>::template t<typename T::Transp>::value,T,typename T::Transp>...>;
+};
+
+template <typename T>
+struct CompsTraits<Transposer<T>>
+{
+  using Type=Transposer<T>;
+  
+  using Ref=T;
+  
+  using RefComps=typename CompsTraits<std::remove_reference_t<T>>::Comps;
+  
+  using Comps=typename _TransposedComps<RefComps>::type;
+};
 
 /////////////////////////////////////////////////////////////////
 
@@ -541,7 +599,7 @@ struct Tens;
 /// Tensor
 template <typename Fund,
 	  typename...TC>
-struct Tens<TensComps<TC...>,Fund>
+struct Tens<TensComps<TC...>,Fund> : public Subscribable<Tens<TensComps<TC...>,Fund>>
 {
   /// Components
   using Comps=TensComps<TC...>;
@@ -674,17 +732,8 @@ struct Tens<TensComps<TC...>,Fund>
   }
   
   /// Access to inner data with any order
-  template <typename...Cp,
-	    std::enable_if_t<sizeof...(Cp)!=sizeof...(TC),void*> =nullptr>
-  decltype(auto) operator()(Cp&&...comps) const ///< Components
-  {
-    return bind(*this,std::forward<Cp>(comps)...);
-  }
-  
-  /// Access to inner data with any order
-  template <typename...Cp,
-	    std::enable_if_t<sizeof...(Cp)==sizeof...(TC),void*> =nullptr>
-  decltype(auto) operator()(Cp&&...comps) const ///< Components
+  template <typename...Cp>
+  const Fund& eval(Cp&&...comps) const ///< Components
   {
     /// Compute the index
     const Size i=reorderedIndex(std::forward<Cp>(comps)...);
@@ -693,16 +742,16 @@ struct Tens<TensComps<TC...>,Fund>
     return data[i];
   }
   
-  PROVIDE_ALSO_NON_CONST_METHOD(operator());
+  //PROVIDE_ALSO_NON_CONST_METHOD(operator());
   
-  /// Single component access via subscribe operator
-  template <typename T>                   // Subscribed component type
-  decltype(auto) operator[](T&& t) const  ///< Subscribed component
-  {
-    return (*this)(std::forward<T>(t));
-  }
+  // /// Single component access via subscribe operator
+  // template <typename T>                   // Subscribed component type
+  // decltype(auto) operator[](T&& t) const  ///< Subscribed component
+  // {
+  //   return (*this)(std::forward<T>(t));
+  // }
   
-  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
+  //PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
   
   /// Provide trivial access to the fundamental data
   const Fund& trivialAccess(const Size& i) const
@@ -719,6 +768,15 @@ struct Tens<TensComps<TC...>,Fund>
   }
   
   PROVIDE_ALSO_NON_CONST_METHOD(getRawAccess);
+};
+
+template <typename Fund,
+	  typename...TC>
+struct CompsTraits<Tens<TensComps<TC...>,Fund>>
+{
+  using Type=Tens<TensComps<TC...>,Fund>;
+  
+  using Comps=TensComps<TC...>;
 };
 
 /////////////////////////////////////////////////////////////////
@@ -745,7 +803,7 @@ using SpinColorFieldD=SpinColorField<double>;
 
 SpaceIdx vol;
 
-//TEST(seq_fun,bind2(tensor,col,spin,space))
+TEST(seq_fun,bind(tensor,col,spin,space).eval())
 
 TEST(bra_fun,tensor[col][spin][space])
 
@@ -822,7 +880,7 @@ int main()
   double& csv=csv_fun(tensor,spin,col,space);
   
   /// Color,spin,space access
-  //double& seq=seq_fun(tensor,spin,col,space);
+  double& seq=seq_fun(tensor,spin,col,space);
   
   /// Color,spin,space access with []
   double& bra=bra_fun(tensor,spin,col,space);
@@ -868,7 +926,7 @@ int main()
   cout<<" "<<svc;
   cout<<" "<<csv;
   cout<<" "<<t;
-  //cout<<" "<<seq;
+  cout<<" "<<seq;
   cout<<" "<<hyp;
   cout<<" "<<bra;
   cout<<" expected: "<<col+3*(space+vol*spin)<<endl;
