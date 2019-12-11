@@ -9,7 +9,7 @@ using std::as_const;
 
 #else
 
-template <class T>
+template <typename T>
 constexpr const T& as_const(T& t) noexcept
 {
   return t;
@@ -61,6 +61,31 @@ using ref_or_val_t=std::conditional_t<std::is_lvalue_reference<T>::value,T&,T>;
   {									\
     return remove_const_if_ref(as_const(*this).NAME(std::forward<Ts>(ts)...)); \
   }
+
+
+template <typename T>
+struct Crtp
+{
+  const T& crtp() const
+  {
+    return *static_cast<const T*>(this);
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(crtp);
+};
+
+template <typename T>
+struct Subscribable : public Crtp<T>
+{
+  /// Single component access via subscribe operator
+  template <typename S>                      // Type of the subscribed component
+  decltype(auto) operator[](S&& s) const     ///< Subscribed component
+  {
+    return this->crtp()(std::forward<S>(s));
+  }
+  
+  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
+};
 
 /// Filter a tuple on the basis of a predicate on the type
 ///
@@ -122,20 +147,6 @@ template <template <class> class F,
 	  typename T>
 using TupleFilter=decltype(tupleFilter<F>(T{}));
 
-template <typename T>
-struct Crtp
-{
-  const T& operator~() const
-  {
-    return *static_cast<const T*>(this);
-  }
-  
-  T& operator~()
-  {
-    return *static_cast<T*>(this);
-  }
-};
-
 // /// Compute the product of the passed list of T values
 // template <typename T,
 // 	  typename...Ts>
@@ -171,11 +182,20 @@ constexpr T combine(F&& f,
   return out;
 }
 
+///Product of the arguments
 template <typename T,
 	  typename...Ts>
 constexpr auto product(Ts&&...t)
 {
   return combine(std::multiplies<>(),T{1},std::forward<Ts>(t)...);
+}
+
+///Sum of the arguments
+template <typename T,
+	  typename...Ts>
+constexpr auto sum(Ts&&...t)
+{
+  return combine(std::plus<>(),T{0},std::forward<Ts>(t)...);
 }
 
 ///Type used to specify size
@@ -280,6 +300,47 @@ struct SizeIsKnownAtCompileTime
   };
 };
 
+template <int N,
+	  typename Tp>
+struct TypeIsInList;
+
+/// Predicate returning whether the size is known ow not at compile time
+template <int N,
+	  typename...Tp>
+struct TypeIsInList<N,std::tuple<Tp...>>
+{
+  /// Internal implementation
+  template <typename T>
+  struct t
+  {
+    /// Predicate result
+    static constexpr bool value=(sum<int>(std::is_same<T,Tp>::value...)==N);
+  };
+};
+
+template <typename F,
+	  typename Tp>
+struct _TupleFilterOut;
+
+template <typename...Fs,
+	  typename...Tps>
+struct _TupleFilterOut<std::tuple<Fs...>,std::tuple<Tps...>>
+{
+  /// Predicate to filter out
+  template <typename T>
+  struct filter
+  {
+    /// Predicate result, counting whether the type match
+    static constexpr bool value=(sum<int>(std::is_same<T,Fs>::value...)==0);
+  };
+  
+  typedef TupleFilter<filter,std::tuple<Tps...>> type;
+};
+
+template <typename F,
+	  typename Tp>
+using TupleFilterOut=typename _TupleFilterOut<F,Tp>::type;
+
 /// Collection of components
 template <typename...Tc>
 using TensComps=std::tuple<Tc...>;
@@ -303,8 +364,14 @@ using ComplIdx=TensorCompIdx<_Compl,ANY,0>;
 /// Binder a component or more than one
 template <typename T,    // Type of the reference to bind
 	  typename...C>  // Type of the components to bind
-struct Binder
+struct Binder : public Subscribable<Binder<T,C...>>
 {
+  using BoundComps=std::tuple<std::remove_reference_t<C>...>;
+  
+  using RefComps=typename std::remove_reference_t<T>::Comps;
+  
+  using Comps=TupleFilterOut<BoundComps,RefComps>;
+  
   /// Reference to bind
   ref_or_val_t<T> ref;
   
@@ -329,15 +396,6 @@ struct Binder
     return f(ref,std::get<C>(vals)...,std::forward<Tail>(tail)...);
   }
   
-  /// Single component access via subscribe operator
-  template <typename S>                      // Type of the subscribed component
-  decltype(auto) operator[](S&& s) const     ///< Subscribed component
-  {
-    return (*this)(std::forward<S>(s));
-  }
-  
-  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
-  
   /// Construct the binder from a reference and components
   Binder(T&& ref,     ///< Reference
 	 C&&...vals)  ///< Components
@@ -355,17 +413,26 @@ struct Binder
 /// Creates a binder, using the passed reference and component
 template <typename T,    // Reference type
 	  typename...Tp> // Components type
-auto bind(const T& ref,       ///< Reference
+auto bind(T&& ref,       ///< Reference
 	  Tp&&...comps)  ///< Components
 {
-  return Binder<const T&,Tp...>(ref,std::forward<Tp>(comps)...);
+  return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
 }
 
+/// Creates a binder, using the passed reference and component
+template <typename T,    // Reference type
+	  typename...Tp> // Components type
+auto bind2(T&& ref,       ///< Reference
+	  Tp&&...comps)  ///< Components
+{
+  // int& r=ref;
+  return Binder<T,Tp...>(std::forward<T>(ref),std::forward<Tp>(comps)...);
+}
 /////////////////////////////////////////////////////////////////
 
 /// Transpose the reference
 template <typename T>    // Type of the reference to transpose
-struct Transposer
+struct Transposer : public Subscribable<Transposer<T>>
 {
   /// Reference to bind
   ref_or_val_t<T> ref;
@@ -379,15 +446,6 @@ struct Transposer
   
   PROVIDE_ALSO_NON_CONST_METHOD(operator());
   
-  /// Single component access via subscribe operator
-  template <typename S>                      // Type of the subscribed component
-  decltype(auto) operator[](S&& s) const     ///< Subscribed component
-  {
-    return (*this)(std::forward<S>(s));
-  }
-  
-  PROVIDE_ALSO_NON_CONST_METHOD(operator[]);
-  
   /// Construct the transposer a reference
   Transposer(T&& ref)     ///< Reference
     : ref(ref)
@@ -397,9 +455,9 @@ struct Transposer
 
 /// Creates a transposer, using the passed reference
 template <typename T>               // Reference type
-auto transpose(const T& ref)      ///< Reference
+Transposer<T> transpose(T&& ref)      ///< Reference
 {
-  return Transposer<const T&>(ref);
+  return std::forward<T>(ref);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -456,6 +514,9 @@ struct TensStorage
   /// Storage of data
   ActualStorage data;
   
+  /// Forbids copy
+  TensStorage(const TensStorage&) =delete;
+  
   /// Construct taking the size to allocate
   TensStorage(const Size& size) ///< Size to allocate
     : data(size)
@@ -475,13 +536,16 @@ struct TensStorage
 /// Tensor with Comps components, of Fund funamental type
 template <typename Comps,
 	  typename Fund>
-class Tens;
+struct Tens;
 
 /// Tensor
 template <typename Fund,
 	  typename...TC>
-class Tens<TensComps<TC...>,Fund>
+struct Tens<TensComps<TC...>,Fund>
 {
+  /// Components
+  using Comps=TensComps<TC...>;
+  
   /// List of all statically allocated components
   using StaticComps=TupleFilter<SizeIsKnownAtCompileTime<true>::t,TensComps<TC...>>;
   
@@ -591,8 +655,6 @@ class Tens<TensComps<TC...>,Fund>
     return {std::get<Td>(std::make_tuple(in...))...};
   }
   
-public:
-  
   /// Report whether the data is allocated on the stack or dynamically
   static constexpr bool stackAllocated=decltype(data)::stackAllocated;
   
@@ -683,7 +745,7 @@ using SpinColorFieldD=SpinColorField<double>;
 
 SpaceIdx vol;
 
-TEST(seq_fun,bind(bind(tensor,col),spin)(space))
+//TEST(seq_fun,bind2(tensor,col,spin,space))
 
 TEST(bra_fun,tensor[col][spin][space])
 
@@ -760,7 +822,7 @@ int main()
   double& csv=csv_fun(tensor,spin,col,space);
   
   /// Color,spin,space access
-  double& seq=seq_fun(tensor,spin,col,space);
+  //double& seq=seq_fun(tensor,spin,col,space);
   
   /// Color,spin,space access with []
   double& bra=bra_fun(tensor,spin,col,space);
@@ -806,7 +868,7 @@ int main()
   cout<<" "<<svc;
   cout<<" "<<csv;
   cout<<" "<<t;
-  cout<<" "<<seq;
+  //cout<<" "<<seq;
   cout<<" "<<hyp;
   cout<<" "<<bra;
   cout<<" expected: "<<col+3*(space+vol*spin)<<endl;
